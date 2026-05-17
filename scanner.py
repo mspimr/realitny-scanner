@@ -844,8 +844,34 @@ function renderTabs(){
     const b=document.createElement('button');
     b.className='tab-btn'+(p.id===activePid?' active':'')+(!p.aktivny?' paused':'');
     b.dataset.pid=p.id;
-    b.innerHTML=`${p.nazov}<span class="cnt" id="cnt-${p.id}">…</span><span class="tab-x" title="Zmazať" onclick="zmazatTab(event,'${p.id}','${p.nazov.replace(/'/g,"\\'")}')">×</span>`;
-    b.onclick=(e)=>{ if(!e.target.classList.contains('tab-x')) switchTab(p.id,true); };
+
+    const cnt=document.createElement('span');
+    cnt.className='cnt'; cnt.id='cnt-'+p.id; cnt.textContent='…';
+
+    const x=document.createElement('span');
+    x.className='tab-x'; x.title='Zmazať'; x.textContent='×';
+    x.dataset.pid=p.id;
+    x.dataset.nazov=p.nazov;
+    x.addEventListener('click',e=>{
+      e.stopPropagation();
+      _confirmDelete(e.currentTarget.dataset.pid, e.currentTarget.dataset.nazov, async()=>{
+        const pid=e.currentTarget.dataset.pid;
+        const res=await post('/api/profil/zmazat',{pid});
+        if(res.ok){
+          const old=G('pane-'+pid); if(old) old.remove();
+          if(activePid===pid) activePid=null;
+          await reload();
+          toast('Profil zmazaný');
+        }
+      });
+    });
+
+    b.appendChild(document.createTextNode(p.nazov));
+    b.appendChild(cnt);
+    b.appendChild(x);
+    b.addEventListener('click',e=>{
+      if(!e.target.classList.contains('tab-x')) switchTab(p.id,true);
+    });
     bar.insertBefore(b,add);
   });
   // Ak nie sú žiadne profily, zobraz prázdny stav
@@ -929,147 +955,304 @@ function renderLeads(pid,leads){
 }
 
 // ── Lokalita dropdown ───────────────────────────────────────
-// Formát: [zobrazený názov, URL slug pre nehnutelnosti.sk, typ: m=mesto o=okres k=kraj]
+// Formát: [zobrazený názov, URL slug pre nehnutelnosti.sk, typ: m=mesto o=okres k=kraj d=dedina/mestská časť]
 const LOKALITY = [
-  // ── Kraje ──
-  ["Celé Slovensko",         "slovensko",              "k"],
-  ["Bratislavský kraj",      "bratislavsky-kraj",      "k"],
-  ["Trnavský kraj",          "trnavsky-kraj",          "k"],
-  ["Trenčiansky kraj",       "trenciansky-kraj",       "k"],
-  ["Nitriansky kraj",        "nitriansky-kraj",        "k"],
-  ["Žilinský kraj",          "zilinsky-kraj",          "k"],
-  ["Banskobystrický kraj",   "banskobystricky-kraj",   "k"],
-  ["Prešovský kraj",         "presovsky-kraj",         "k"],
-  ["Košický kraj",           "kosicky-kraj",           "k"],
-  // ── Okresy Žilinského kraja ──
-  ["Okres Liptovský Mikuláš","okres-liptovsky-mikulas","o"],
-  ["Okres Ružomberok",       "okres-ruzomberok",       "o"],
-  ["Okres Martin",           "okres-martin",           "o"],
-  ["Okres Žilina",           "okres-zilina",           "o"],
-  ["Okres Čadca",            "okres-cadca",            "o"],
-  ["Okres Bytča",            "okres-bytca",            "o"],
-  ["Okres Dolný Kubín",      "okres-dolny-kubin",      "o"],
-  ["Okres Kysucké Nové Mesto","okres-kysucke-nove-mesto","o"],
-  ["Okres Námestovo",        "okres-namestovo",        "o"],
-  ["Okres Turčianske Teplice","okres-turcanske-teplice","o"],
-  ["Okres Tvrdošín",         "okres-tvrdosin",         "o"],
-  // ── Mestá Žilinský kraj ──
-  ["Liptovský Mikuláš",      "liptovsky-mikulas",      "m"],
-  ["Ružomberok",             "ruzomberok",             "m"],
-  ["Žilina",                 "zilina",                 "m"],
-  ["Martin",                 "martin",                 "m"],
-  ["Čadca",                  "cadca",                  "m"],
-  ["Dolný Kubín",            "dolny-kubin",            "m"],
-  ["Námestovo",              "namestovo",              "m"],
-  ["Tvrdošín",               "tvrdosin",               "m"],
-  ["Turčianske Teplice",     "turcanske-teplice",      "m"],
-  ["Liptovský Hrádok",       "liptovsky-hradok",       "m"],
-  ["Ružomberok - Rybárpole", "ruzomberok",             "m"],
-  // ── Okresy Banskobystrický kraj ──
-  ["Okres Banská Bystrica",  "okres-banska-bystrica",  "o"],
-  ["Okres Zvolen",           "okres-zvolen",           "o"],
-  ["Okres Brezno",           "okres-brezno",           "o"],
-  ["Okres Rimavská Sobota",  "okres-rimavska-sobota",  "o"],
-  ["Okres Lučenec",          "okres-lucenec",          "o"],
-  ["Okres Veľký Krtíš",      "okres-velky-krtis",      "o"],
-  ["Okres Detva",            "okres-detva",            "o"],
-  ["Okres Revúca",           "okres-revuca",           "o"],
-  ["Okres Žiar nad Hronom",  "okres-ziar-nad-hronom",  "o"],
-  ["Okres Krupina",          "okres-krupina",          "o"],
-  ["Okres Poltár",           "okres-poltar",           "o"],
-  // ── Mestá BB kraj ──
-  ["Banská Bystrica",        "banska-bystrica",        "m"],
-  ["Zvolen",                 "zvolen",                 "m"],
-  ["Brezno",                 "brezno",                 "m"],
-  ["Rimavská Sobota",        "rimavska-sobota",        "m"],
-  ["Lučenec",                "lucenec",                "m"],
-  ["Žiar nad Hronom",        "ziar-nad-hronom",        "m"],
-  ["Detva",                  "detva",                  "m"],
-  // ── Bratislava ──
-  ["Okres Bratislava I",     "okres-bratislava-i",     "o"],
-  ["Okres Bratislava II",    "okres-bratislava-ii",    "o"],
-  ["Okres Bratislava III",   "okres-bratislava-iii",   "o"],
-  ["Okres Bratislava IV",    "okres-bratislava-iv",    "o"],
-  ["Okres Bratislava V",     "okres-bratislava-v",     "o"],
-  ["Bratislava",             "bratislava",             "m"],
-  ["Bratislava - Staré Mesto","bratislava-stare-mesto","m"],
-  ["Bratislava - Ružinov",   "bratislava-ruzinov",     "m"],
-  ["Bratislava - Petržalka", "bratislava-petrzalka",   "m"],
-  ["Bratislava - Nové Mesto","bratislava-nove-mesto",  "m"],
-  ["Bratislava - Devínska Nová Ves","bratislava-devinska-nova-ves","m"],
-  ["Bratislava - Dúbravka",  "bratislava-dubravka",    "m"],
-  ["Bratislava - Karlova Ves","bratislava-karlova-ves","m"],
-  ["Bratislava - Vajnory",   "bratislava-vajnory",     "m"],
-  // ── Trnavský kraj ──
-  ["Okres Trnava",           "okres-trnava",           "o"],
-  ["Okres Dunajská Streda",  "okres-dunajska-streda",  "o"],
-  ["Okres Senica",           "okres-senica",           "o"],
-  ["Okres Skalica",          "okres-skalica",          "o"],
-  ["Okres Hlohovec",         "okres-hlohovec",         "o"],
-  ["Okres Piešťany",         "okres-piestany",         "o"],
-  ["Okres Galanta",          "okres-galanta",          "o"],
-  ["Trnava",                 "trnava",                 "m"],
-  ["Dunajská Streda",        "dunajska-streda",        "m"],
-  ["Piešťany",               "piestany",               "m"],
-  ["Senica",                 "senica",                 "m"],
-  ["Galanta",                "galanta",                "m"],
-  // ── Trenčiansky kraj ──
-  ["Okres Trenčín",          "okres-trencin",          "o"],
-  ["Okres Považská Bystrica","okres-povazska-bystrica","o"],
-  ["Okres Nové Mesto nad Váhom","okres-nove-mesto-nad-vahom","o"],
-  ["Okres Prievidza",        "okres-prievidza",        "o"],
-  ["Okres Ilava",            "okres-ilava",            "o"],
-  ["Okres Púchov",           "okres-puchov",           "o"],
-  ["Trenčín",                "trencin",                "m"],
-  ["Považská Bystrica",      "povazska-bystrica",      "m"],
-  ["Prievidza",              "prievidza",              "m"],
-  ["Nové Mesto nad Váhom",   "nove-mesto-nad-vahom",   "m"],
-  ["Púchov",                 "puchov",                 "m"],
-  // ── Nitriansky kraj ──
-  ["Okres Nitra",            "okres-nitra",            "o"],
-  ["Okres Nové Zámky",       "okres-nove-zamky",       "o"],
-  ["Okres Komárno",          "okres-komarno",          "o"],
-  ["Okres Levice",           "okres-levice",           "o"],
-  ["Okres Topoľčany",        "okres-topol-cany",       "o"],
-  ["Okres Zlaté Moravce",    "okres-zlate-moravce",    "o"],
-  ["Nitra",                  "nitra",                  "m"],
-  ["Nové Zámky",             "nove-zamky",             "m"],
-  ["Komárno",                "komarno",                "m"],
-  ["Levice",                 "levice",                 "m"],
-  ["Topoľčany",              "topolcany",              "m"],
-  // ── Prešovský kraj ──
-  ["Okres Prešov",           "okres-presov",           "o"],
-  ["Okres Poprad",           "okres-poprad",           "o"],
-  ["Okres Stará Ľubovňa",    "okres-stara-lubovna",    "o"],
-  ["Okres Kežmarok",         "okres-kezmarok",         "o"],
-  ["Okres Bardejov",         "okres-bardejov",         "o"],
-  ["Okres Humenné",          "okres-humenne",          "o"],
-  ["Okres Michalovce",       "okres-michalovce",       "o"],
-  ["Okres Vranov nad Topľou","okres-vranov-nad-toplou","o"],
-  ["Prešov",                 "presov",                 "m"],
-  ["Poprad",                 "poprad",                 "m"],
-  ["Stará Ľubovňa",          "stara-lubovna",          "m"],
-  ["Kežmarok",               "kezmarok",               "m"],
-  ["Bardejov",               "bardejov",               "m"],
-  ["Humenné",                "humenne",                "m"],
-  ["Vysoké Tatry",           "vysoke-tatry",           "m"],
-  ["Levoča",                 "levoca",                 "m"],
-  ["Spišská Nová Ves",       "spiska-nova-ves",        "m"],
-  // ── Košický kraj ──
-  ["Okres Košice I",         "okres-kosice-i",         "o"],
-  ["Okres Košice II",        "okres-kosice-ii",        "o"],
-  ["Okres Košice III",       "okres-kosice-iii",       "o"],
-  ["Okres Košice IV",        "okres-kosice-iv",        "o"],
-  ["Okres Košice-okolie",    "okres-kosice-okolie",    "o"],
-  ["Okres Gelnica",          "okres-gelnica",          "o"],
-  ["Okres Rožňava",          "okres-roznava",          "o"],
-  ["Košice",                 "kosice",                 "m"],
-  ["Košice - Staré Mesto",   "kosice-stare-mesto",     "m"],
-  ["Rožňava",                "roznava",                "m"],
-  ["Gelnica",                "gelnica",                "m"],
-];
+  // ── Celé Slovensko a kraje ──
+  ["Celé Slovensko",              "slovensko",                    "k"],
+  ["Bratislavský kraj",           "bratislavsky-kraj",            "k"],
+  ["Trnavský kraj",               "trnavsky-kraj",                "k"],
+  ["Trenčiansky kraj",            "trenciansky-kraj",             "k"],
+  ["Nitriansky kraj",             "nitriansky-kraj",              "k"],
+  ["Žilinský kraj",               "zilinsky-kraj",                "k"],
+  ["Banskobystrický kraj",        "banskobystricky-kraj",         "k"],
+  ["Prešovský kraj",              "presovsky-kraj",               "k"],
+  ["Košický kraj",                "kosicky-kraj",                 "k"],
 
-const LOK_TYPE_LABEL = {m:"mesto", o:"okres", k:"kraj"};
+  // ══ OKRES LIPTOVSKÝ MIKULÁŠ ══
+  ["Okres Liptovský Mikuláš",     "okres-liptovsky-mikulas",      "o"],
+  ["Liptovský Mikuláš",           "liptovsky-mikulas",            "m"],
+  ["Palúdzka",                    "paludzka",                     "d"],
+  ["Liptovská Ondrašová",         "liptovska-ondrasova",          "d"],
+  ["Demänová",                    "demanova",                     "d"],
+  ["Demänovská Dolina",           "demanovska-dolina",            "d"],
+  ["Liptovský Trnovec",           "liptovsky-trnovec",            "d"],
+  ["Liptovská Mara",              "liptovska-mara",               "d"],
+  ["Liptovský Hrádok",            "liptovsky-hradok",             "m"],
+  ["Liptovská Porúbka",           "liptovska-porubka",            "d"],
+  ["Liptovský Ján",               "liptovsky-jan",                "d"],
+  ["Liptovská Osada",             "liptovska-osada",              "d"],
+  ["Liptovské Sliače",            "liptovske-sliace",             "d"],
+  ["Partizánska Ľupča",           "partizanska-lupca",            "d"],
+  ["Liptovský Mikuláš - centrum", "liptovsky-mikulas",            "d"],
+  ["Dúbrava",                     "dubrava",                      "d"],
+  ["Bobrovec",                    "bobrovec",                     "d"],
+  ["Liptovský Peter",             "liptovsky-peter",              "d"],
+  ["Kvačany",                     "kvacany",                      "d"],
+  ["Prosiek",                     "prosiek",                      "d"],
+  ["Ľubochňa",                    "lubochna",                     "d"],
+  ["Stankovany",                  "stankovany",                   "d"],
+  ["Lúčky",                       "lucky",                        "d"],
+  ["Lisková",                     "liskova",                      "d"],
+
+  // ══ OKRES RUŽOMBEROK ══
+  ["Okres Ružomberok",            "okres-ruzomberok",             "o"],
+  ["Ružomberok",                  "ruzomberok",                   "m"],
+  ["Hrabovo",                     "hrabovo",                      "d"],
+  ["Hrabovská dolina",            "hrabovska-dolina",             "d"],
+  ["Klačno",                      "klacno",                       "d"],
+  ["Biely Potok",                 "biely-potok",                  "d"],
+  ["Ružomberok - Rybárpole",      "ruzomberok",                   "d"],
+  ["Ružomberok - centrum",        "ruzomberok",                   "d"],
+  ["Likavka",                     "likavka",                      "d"],
+  ["Liptovská Štiavnica",         "liptovska-stiavnica",          "d"],
+  ["Černová",                     "cernova",                      "d"],
+  ["Ľubochňa dolina",             "lubochna-dolina",              "d"],
+
+  // ══ OKRES MARTIN ══
+  ["Okres Martin",                "okres-martin",                 "o"],
+  ["Martin",                      "martin",                       "m"],
+  ["Vrútky",                      "vrutky",                       "d"],
+  ["Turčianske Teplice",          "turcanske-teplice",            "m"],
+  ["Turčiansky Michal",           "turcianske-teplice",           "d"],
+  ["Sučany",                      "sucany",                       "d"],
+  ["Priekopa",                    "priekopa",                     "d"],
+  ["Záturčie",                    "zaturcie",                     "d"],
+  ["Bystrička",                   "bystricka",                    "d"],
+  ["Sklabinský Podzámok",         "sklabinsky-podzamok",          "d"],
+
+  // ══ OKRES ŽILINA ══
+  ["Okres Žilina",                "okres-zilina",                 "o"],
+  ["Žilina",                      "zilina",                       "m"],
+  ["Žilina - Závodie",            "zilina-zavodie",               "d"],
+  ["Žilina - Bytčica",            "zilina-bytcica",               "d"],
+  ["Žilina - Hliny",              "zilina-hliny",                 "d"],
+  ["Žilina - Solinky",            "zilina-solinky",               "d"],
+  ["Žilina - Vlčince",            "zilina-vlcince",               "d"],
+  ["Strečno",                     "strecno",                      "d"],
+  ["Rajecké Teplice",             "rajecke-teplice",              "d"],
+  ["Rajec",                       "rajec",                        "m"],
+  ["Terchová",                    "terchova",                     "d"],
+  ["Belá",                        "bela",                         "d"],
+
+  // ══ OKRES ČADCA ══
+  ["Okres Čadca",                 "okres-cadca",                  "o"],
+  ["Čadca",                       "cadca",                        "m"],
+  ["Krásno nad Kysucou",          "krasno-nad-kysucou",           "d"],
+  ["Makov",                       "makov",                        "d"],
+
+  // ══ OKRES DOLNÝ KUBÍN ══
+  ["Okres Dolný Kubín",           "okres-dolny-kubin",            "o"],
+  ["Dolný Kubín",                 "dolny-kubin",                  "m"],
+  ["Veličná",                     "velicna",                      "d"],
+  ["Oravský Podzámok",            "oravsky-podzamok",             "d"],
+
+  // ══ OKRES NÁMESTOVO ══
+  ["Okres Námestovo",             "okres-namestovo",              "o"],
+  ["Námestovo",                   "namestovo",                    "m"],
+  ["Oravská Polhora",             "oravska-polhora",              "d"],
+  ["Zubrohlava",                  "zubrohlava",                   "d"],
+
+  // ══ OKRES TVRDOŠÍN ══
+  ["Okres Tvrdošín",              "okres-tvrdosin",               "o"],
+  ["Tvrdošín",                    "tvrdosin",                     "m"],
+  ["Trstená",                     "trstena",                      "m"],
+  ["Nižná",                       "nizna",                        "d"],
+
+  // ══ BRATISLAVA ══
+  ["Okres Bratislava I",          "okres-bratislava-i",           "o"],
+  ["Okres Bratislava II",         "okres-bratislava-ii",          "o"],
+  ["Okres Bratislava III",        "okres-bratislava-iii",         "o"],
+  ["Okres Bratislava IV",         "okres-bratislava-iv",          "o"],
+  ["Okres Bratislava V",          "okres-bratislava-v",           "o"],
+  ["Bratislava",                  "bratislava",                   "m"],
+  ["Bratislava - Staré Mesto",    "bratislava-stare-mesto",       "d"],
+  ["Bratislava - Ružinov",        "bratislava-ruzinov",           "d"],
+  ["Bratislava - Petržalka",      "bratislava-petrzalka",         "d"],
+  ["Bratislava - Nové Mesto",     "bratislava-nove-mesto",        "d"],
+  ["Bratislava - Dúbravka",       "bratislava-dubravka",          "d"],
+  ["Bratislava - Karlova Ves",    "bratislava-karlova-ves",       "d"],
+  ["Bratislava - Devínska Nová Ves","bratislava-devinska-nova-ves","d"],
+  ["Bratislava - Rača",           "bratislava-raca",              "d"],
+  ["Bratislava - Vajnory",        "bratislava-vajnory",           "d"],
+  ["Bratislava - Vrakuňa",        "bratislava-vrakuna",           "d"],
+  ["Bratislava - Podunajské Biskupice","bratislava-podunajske-biskupice","d"],
+  ["Bratislava - Lamač",          "bratislava-lamac",             "d"],
+  ["Bratislava - Záhorská Bystrica","bratislava-zahorska-bystrica","d"],
+  ["Bratislava - Čunovo",         "bratislava-cunovo",            "d"],
+  ["Bratislava - Devín",          "bratislava-devin",             "d"],
+  ["Bratislava - Jarovce",        "bratislava-jarovce",           "d"],
+  ["Bratislava - Rusovce",        "bratislava-rusovce",           "d"],
+  ["Senec",                       "senec",                        "m"],
+  ["Pezinok",                     "pezinok",                      "m"],
+  ["Malacky",                     "malacky",                      "m"],
+  ["Modra",                       "modra",                        "m"],
+  ["Svätý Jur",                   "svaty-jur",                    "d"],
+  ["Dunajská Lužná",              "dunajska-luzna",               "d"],
+  ["Stupava",                     "stupava",                      "d"],
+
+  // ══ TRNAVSKÝ KRAJ ══
+  ["Okres Trnava",                "okres-trnava",                 "o"],
+  ["Trnava",                      "trnava",                       "m"],
+  ["Trnava - centrum",            "trnava",                       "d"],
+  ["Okres Dunajská Streda",       "okres-dunajska-streda",        "o"],
+  ["Dunajská Streda",             "dunajska-streda",              "m"],
+  ["Šamorín",                     "samorin",                      "m"],
+  ["Okres Piešťany",              "okres-piestany",               "o"],
+  ["Piešťany",                    "piestany",                     "m"],
+  ["Okres Senica",                "okres-senica",                 "o"],
+  ["Senica",                      "senica",                       "m"],
+  ["Skalica",                     "skalica",                      "m"],
+  ["Okres Hlohovec",              "okres-hlohovec",               "o"],
+  ["Hlohovec",                    "hlohovec",                     "m"],
+  ["Okres Galanta",               "okres-galanta",                "o"],
+  ["Galanta",                     "galanta",                      "m"],
+  ["Šaľa",                        "sala",                         "m"],
+
+  // ══ TRENČIANSKY KRAJ ══
+  ["Okres Trenčín",               "okres-trencin",                "o"],
+  ["Trenčín",                     "trencin",                      "m"],
+  ["Trenčín - Juh",               "trencin-juh",                  "d"],
+  ["Trenčín - Záblatie",          "trencin-zablatie",             "d"],
+  ["Okres Považská Bystrica",     "okres-povazska-bystrica",      "o"],
+  ["Považská Bystrica",           "povazska-bystrica",            "m"],
+  ["Okres Prievidza",             "okres-prievidza",              "o"],
+  ["Prievidza",                   "prievidza",                    "m"],
+  ["Bojnice",                     "bojnice",                      "d"],
+  ["Okres Nové Mesto nad Váhom",  "okres-nove-mesto-nad-vahom",   "o"],
+  ["Nové Mesto nad Váhom",        "nove-mesto-nad-vahom",         "m"],
+  ["Okres Ilava",                 "okres-ilava",                  "o"],
+  ["Ilava",                       "ilava",                        "m"],
+  ["Dubnica nad Váhom",           "dubnica-nad-vahom",            "m"],
+  ["Okres Púchov",                "okres-puchov",                 "o"],
+  ["Púchov",                      "puchov",                       "m"],
+  ["Okres Myjava",                "okres-myjava",                 "o"],
+  ["Myjava",                      "myjava",                       "m"],
+
+  // ══ NITRIANSKY KRAJ ══
+  ["Okres Nitra",                 "okres-nitra",                  "o"],
+  ["Nitra",                       "nitra",                        "m"],
+  ["Nitra - Chrenová",            "nitra-chrenova",               "d"],
+  ["Nitra - Zobor",               "nitra-zobor",                  "d"],
+  ["Nitra - Mlynárce",            "nitra-mlynarce",               "d"],
+  ["Okres Nové Zámky",            "okres-nove-zamky",             "o"],
+  ["Nové Zámky",                  "nove-zamky",                   "m"],
+  ["Okres Komárno",               "okres-komarno",                "o"],
+  ["Komárno",                     "komarno",                      "m"],
+  ["Okres Levice",                "okres-levice",                 "o"],
+  ["Levice",                      "levice",                       "m"],
+  ["Okres Topoľčany",             "okres-topolcany",              "o"],
+  ["Topoľčany",                   "topolcany",                    "m"],
+  ["Okres Zlaté Moravce",         "okres-zlate-moravce",          "o"],
+  ["Zlaté Moravce",               "zlate-moravce",                "m"],
+  ["Okres Šaľa",                  "okres-sala",                   "o"],
+  ["Okres Vráble",                "okres-vrable",                 "o"],
+
+  // ══ BANSKOBYSTRICKÝ KRAJ ══
+  ["Okres Banská Bystrica",       "okres-banska-bystrica",        "o"],
+  ["Banská Bystrica",             "banska-bystrica",              "m"],
+  ["Banská Bystrica - Sásová",    "banska-bystrica-sasova",       "d"],
+  ["Banská Bystrica - Fončorda",  "banska-bystrica-foncorda",     "d"],
+  ["Banská Bystrica - Radvaň",    "banska-bystrica-radvan",       "d"],
+  ["Banská Bystrica - centrum",   "banska-bystrica",              "d"],
+  ["Okres Zvolen",                "okres-zvolen",                 "o"],
+  ["Zvolen",                      "zvolen",                       "m"],
+  ["Okres Brezno",                "okres-brezno",                 "o"],
+  ["Brezno",                      "brezno",                       "m"],
+  ["Horná Lehota",                "horna-lehota",                 "d"],
+  ["Okres Rimavská Sobota",       "okres-rimavska-sobota",        "o"],
+  ["Rimavská Sobota",             "rimavska-sobota",              "m"],
+  ["Okres Lučenec",               "okres-lucenec",                "o"],
+  ["Lučenec",                     "lucenec",                      "m"],
+  ["Okres Veľký Krtíš",           "okres-velky-krtis",            "o"],
+  ["Veľký Krtíš",                 "velky-krtis",                  "m"],
+  ["Okres Detva",                 "okres-detva",                  "o"],
+  ["Detva",                       "detva",                        "m"],
+  ["Okres Revúca",                "okres-revuca",                 "o"],
+  ["Revúca",                      "revuca",                       "m"],
+  ["Okres Žiar nad Hronom",       "okres-ziar-nad-hronom",        "o"],
+  ["Žiar nad Hronom",             "ziar-nad-hronom",              "m"],
+  ["Žarnovica",                   "zarnovica",                    "m"],
+  ["Okres Krupina",               "okres-krupina",                "o"],
+  ["Krupina",                     "krupina",                      "m"],
+  ["Donovaly",                    "donovaly",                     "d"],
+  ["Liptovská Osada (BB kraj)",   "liptovska-osada",              "d"],
+
+  // ══ PREŠOVSKÝ KRAJ ══
+  ["Okres Prešov",                "okres-presov",                 "o"],
+  ["Prešov",                      "presov",                       "m"],
+  ["Prešov - Sekčov",             "presov-sekcov",                "d"],
+  ["Prešov - Solivar",            "presov-solivar",               "d"],
+  ["Prešov - Šváby",              "presov-svaby",                 "d"],
+  ["Okres Poprad",                "okres-poprad",                 "o"],
+  ["Poprad",                      "poprad",                       "m"],
+  ["Poprad - Matejovce",          "poprad-matejovce",             "d"],
+  ["Poprad - Spišská Sobota",     "poprad-spiska-sobota",         "d"],
+  ["Poprad - Stráže",             "poprad-straze",                "d"],
+  ["Vysoké Tatry",                "vysoke-tatry",                 "m"],
+  ["Tatranská Lomnica",           "tatranska-lomnica",            "d"],
+  ["Tatranská Kotlina",           "tatranska-kotlina",            "d"],
+  ["Štrbské Pleso",               "strbske-pleso",                "d"],
+  ["Starý Smokovec",              "stary-smokovec",               "d"],
+  ["Nový Smokovec",               "novy-smokovec",                "d"],
+  ["Tatranská Štrba",             "tatranska-strba",              "d"],
+  ["Okres Stará Ľubovňa",         "okres-stara-lubovna",          "o"],
+  ["Stará Ľubovňa",               "stara-lubovna",                "m"],
+  ["Spišská Belá",                "spiska-bela",                  "m"],
+  ["Okres Kežmarok",              "okres-kezmarok",               "o"],
+  ["Kežmarok",                    "kezmarok",                     "m"],
+  ["Veľká Lomnica",               "velka-lomnica",                "d"],
+  ["Okres Bardejov",              "okres-bardejov",               "o"],
+  ["Bardejov",                    "bardejov",                     "m"],
+  ["Bardejovské Kúpele",          "bardejovske-kupele",           "d"],
+  ["Okres Humenné",               "okres-humenne",                "o"],
+  ["Humenné",                     "humenne",                      "m"],
+  ["Okres Vranov nad Topľou",     "okres-vranov-nad-toplou",      "o"],
+  ["Vranov nad Topľou",           "vranov-nad-toplou",            "m"],
+  ["Okres Stropkov",              "okres-stropkov",               "o"],
+  ["Stropkov",                    "stropkov",                     "m"],
+  ["Okres Snina",                 "okres-snina",                  "o"],
+  ["Snina",                       "snina",                        "m"],
+  ["Okres Sabinov",               "okres-sabinov",                "o"],
+  ["Sabinov",                     "sabinov",                      "m"],
+  ["Okres Levoča",                "okres-levoca",                 "o"],
+  ["Levoča",                      "levoca",                       "m"],
+  ["Okres Spišská Nová Ves",      "okres-spiska-nova-ves",        "o"],
+  ["Spišská Nová Ves",            "spiska-nova-ves",              "m"],
+  ["Spišské Podhradie",           "spiske-podhradie",             "d"],
+  ["Okres Stará Ľubovňa",        "okres-stara-lubovna",          "o"],
+
+  // ══ KOŠICKÝ KRAJ ══
+  ["Okres Košice I",              "okres-kosice-i",               "o"],
+  ["Okres Košice II",             "okres-kosice-ii",              "o"],
+  ["Okres Košice III",            "okres-kosice-iii",             "o"],
+  ["Okres Košice IV",             "okres-kosice-iv",              "o"],
+  ["Okres Košice-okolie",         "okres-kosice-okolie",          "o"],
+  ["Košice",                      "kosice",                       "m"],
+  ["Košice - Staré Mesto",        "kosice-stare-mesto",           "d"],
+  ["Košice - Západ",              "kosice-zapad",                 "d"],
+  ["Košice - Sever",              "kosice-sever",                 "d"],
+  ["Košice - Juh",                "kosice-juh",                   "d"],
+  ["Košice - Dargovských hrdinov","kosice-dargovskych-hrdinov",   "d"],
+  ["Košice - Západ Nad jazerom",  "kosice-nad-jazerom",           "d"],
+  ["Košice - Sídlisko KVP",       "kosice-sidlisko-kvp",          "d"],
+  ["Košice - Barca",              "kosice-barca",                 "d"],
+  ["Košice - Šaca",               "kosice-saca",                  "d"],
+  ["Košice - Myslava",            "kosice-myslava",               "d"],
+  ["Košice - Kavečany",           "kosice-kavecany",              "d"],
+  ["Okres Gelnica",               "okres-gelnica",                "o"],
+  ["Gelnica",                     "gelnica",                      "m"],
+  ["Okres Rožňava",               "okres-roznava",                "o"],
+  ["Rožňava",                     "roznava",                      "m"],
+  ["Okres Michalovce",            "okres-michalovce",             "o"],
+  ["Michalovce",                  "michalovce",                   "m"],
+  ["Okres Spišská Nová Ves",      "okres-spiska-nova-ves",        "o"],
+  ["Okres Sobrance",              "okres-sobrance",               "o"],
+  ["Sobrance",                    "sobrance",                     "m"],
+  ["Okres Trebišov",              "okres-trebisov",               "o"],
+  ["Trebišov",                    "trebisov",                     "m"],
+  ["Veľké Kapušany",              "velke-kapusany",               "m"],
+]
+const LOK_TYPE_LABEL = {m:"mesto", o:"okres", k:"kraj", d:"obec/č.mesta"};
 
 function _normStr(s){
   return s.toLowerCase()
@@ -1215,14 +1398,6 @@ async function zmazat(){
   _confirmDelete(pid,G('f-nazov').value,async()=>{
     const res=await post('/api/profil/zmazat',{pid});
     if(res.ok){closeModal();const old=G('pane-'+pid);if(old)old.remove();activePid=null;await reload();toast('Profil zmazaný');}
-  });
-}
-
-function zmazatTab(e,pid,nazov){
-  e.stopPropagation();
-  _confirmDelete(pid,nazov,async()=>{
-    const res=await post('/api/profil/zmazat',{pid});
-    if(res.ok){const old=G('pane-'+pid);if(old)old.remove();if(activePid===pid)activePid=null;await reload();toast('Profil zmazaný');}
   });
 }
 
