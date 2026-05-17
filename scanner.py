@@ -24,8 +24,8 @@ from flask import Flask, abort, jsonify, render_template_string, request
 #  KONFIGURÁCIA
 # ============================================================
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY",  "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
+DISCORD_WEBHOOK_URL= os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_MIN_SKORE  = int(os.getenv("DISCORD_MIN_SKORE", "70"))
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD",  "liptov2025")
 EMAIL_ODOSIELATEL  = os.getenv("EMAIL_ODOSIELATEL",   "")
 EMAIL_PRIJEMCA     = os.getenv("EMAIL_PRIJEMCA",      "")
@@ -91,7 +91,7 @@ def init_db():
             id TEXT PRIMARY KEY, nazov TEXT NOT NULL,
             kriteria TEXT NOT NULL, zdroje TEXT NOT NULL,
             aktivny INTEGER DEFAULT 1, interval_min INTEGER DEFAULT 10,
-            tg_min_skore INTEGER DEFAULT 70, vytvoreny TEXT, posledny_scan TEXT
+            discord_min_skore INTEGER DEFAULT 70, vytvoreny TEXT, posledny_scan TEXT
         )""",
         """CREATE TABLE IF NOT EXISTS leads (
             id TEXT NOT NULL, profil_id TEXT NOT NULL, zdroj TEXT,
@@ -122,7 +122,7 @@ def init_db():
                 ensure_ascii=False)
             z = json.dumps(["nehnutelnosti","topreality"])
             cur.execute(
-                f"INSERT INTO profiles (id,nazov,kriteria,zdroje,aktivny,interval_min,tg_min_skore,vytvoreny)"
+                f"INSERT INTO profiles (id,nazov,kriteria,zdroje,aktivny,interval_min,discord_min_skore,vytvoreny)"
                 f" VALUES ({PH},{PH},{PH},{PH},1,10,70,{PH})",
                 (pid,"Byty Liptov",k,z,datetime.now().isoformat()))
 
@@ -146,7 +146,7 @@ def db_vsetky_profily():
         return [_pp(_r(r)) for r in cur.fetchall()]
 
 
-def db_uloz_profil(pid, nazov, kriteria, zdroje, interval_min, tg_min_skore):
+def db_uloz_profil(pid, nazov, kriteria, zdroje, interval_min, discord_min_skore):
     kj = json.dumps(kriteria, ensure_ascii=False)
     zj = json.dumps(zdroje)
     with get_db() as con:
@@ -155,14 +155,14 @@ def db_uloz_profil(pid, nazov, kriteria, zdroje, interval_min, tg_min_skore):
         if cur.fetchone():
             cur.execute(
                 f"UPDATE profiles SET nazov={PH},kriteria={PH},zdroje={PH},"
-                f"interval_min={PH},tg_min_skore={PH} WHERE id={PH}",
-                (nazov,kj,zj,interval_min,tg_min_skore,pid))
+                f"interval_min={PH},discord_min_skore={PH} WHERE id={PH}",
+                (nazov,kj,zj,interval_min,discord_min_skore,pid))
             cur.execute(f"DELETE FROM leads WHERE profil_id={PH}", (pid,))
         else:
             cur.execute(
-                f"INSERT INTO profiles (id,nazov,kriteria,zdroje,aktivny,interval_min,tg_min_skore,vytvoreny)"
+                f"INSERT INTO profiles (id,nazov,kriteria,zdroje,aktivny,interval_min,discord_min_skore,vytvoreny)"
                 f" VALUES ({PH},{PH},{PH},{PH},1,{PH},{PH},{PH})",
-                (pid,nazov,kj,zj,interval_min,tg_min_skore,datetime.now().isoformat()))
+                (pid,nazov,kj,zj,interval_min,discord_min_skore,datetime.now().isoformat()))
 
 
 def db_zmazat_profil(pid):
@@ -457,45 +457,92 @@ def skore(p, k):
 
 
 def ai_hodnot(ponuky, k):
-    if not ANTHROPIC_API_KEY or not ponuky:
-        return {p["id"]: skore(p,k) for p in ponuky}
-    zoznam = "\n".join(f"[{i+1}] {p['nazov']} | {p.get('cena',0)}€ | {p.get('plocha',0)}m² | {p.get('popis','')[:100]}"
-                       for i,p in enumerate(ponuky))
-    prompt = (f"Ohodnoť realitné ponuky 0-100 pre investora.\n"
-              f"Max cena: {k.get('max_cena',0)}€, lokalita: {k.get('lokalita','')}\n"
-              f"Pokyn: {k.get('ai_pokyn','')}\n\nPonuky:\n{zoznam}\n\n"
-              f"Odpovedz IBA JSON: {{\"1\":85,\"2\":40,...}}")
-    try:
-        r = requests.post("https://api.anthropic.com/v1/messages",
-            headers={"x-api-key":ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","content-type":"application/json"},
-            json={"model":"claude-haiku-4-5-20251001","max_tokens":300,"messages":[{"role":"user","content":prompt}]},
-            timeout=20)
-        mapa = json.loads(r.json()["content"][0]["text"].strip())
-        return {ponuky[int(ki)-1]["id"]: int(v) for ki,v in mapa.items() if int(ki)-1 < len(ponuky)}
-    except Exception as e:
-        _log(f"AI chyba: {e}","warn")
-        return {p["id"]: skore(p,k) for p in ponuky}
+    """
+    AI hodnotenie — volá sa LEN pre nové ponuky ktoré ešte nemajú skóre.
+    Dávky po max 20 položiek → šetrí tokeny a API náklady.
+    Základný skóre sa použije ako fallback bez API volania.
+    """
+    if not ponuky:
+        return {}
+
+    # Bez API kľúča — len základné skóre, žiadne API volanie
+    if not ANTHROPIC_API_KEY:
+        return {p["id"]: skore(p, k) for p in ponuky}
+
+    vysledky = {}
+    # Dávky po 20 — optimálny pomer cena/kvalita pre Haiku
+    BATCH = 20
+    for i in range(0, len(ponuky), BATCH):
+        davka = ponuky[i:i+BATCH]
+        zoznam = "\n".join(
+            f"[{j+1}] {p['nazov']} | {p.get('cena',0)}€ | {p.get('plocha',0)}m² | {p.get('popis','')[:80]}"
+            for j, p in enumerate(davka)
+        )
+        prompt = (
+            f"Ohodnoť realitné ponuky 0-100 pre investora.\n"
+            f"Kritériá: max {k.get('max_cena',0)}€, lokalita {k.get('lokalita','')}, "
+            f"min {k.get('min_plocha',0)}m², min {k.get('min_izby',1)} izby\n"
+            f"Pokyn: {k.get('ai_pokyn','')}\n\n"
+            f"Ponuky:\n{zoznam}\n\n"
+            f"Odpovedz IBA JSON bez textu: {{\"1\":85,\"2\":40,...}}"
+        )
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_API_KEY,
+                         "anthropic-version": "2023-06-01",
+                         "content-type": "application/json"},
+                json={"model": "claude-haiku-4-5-20251001",
+                      "max_tokens": 256,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            mapa = json.loads(r.json()["content"][0]["text"].strip())
+            for ki, v in mapa.items():
+                idx = int(ki) - 1
+                if 0 <= idx < len(davka):
+                    vysledky[davka[idx]["id"]] = max(0, min(99, int(v)))
+        except Exception as e:
+            _log(f"AI dávka {i//BATCH+1} chyba: {e}", "warn")
+            # Fallback — základné skóre pre túto dávku
+            for p in davka:
+                if p["id"] not in vysledky:
+                    vysledky[p["id"]] = skore(p, k)
+
+    return vysledky
 
 
 # ============================================================
 #  NOTIFIKÁCIE
 # ============================================================
 
-def posli_telegram(lead, profil_nazov, min_skore):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
-    if lead.get("skore",0) < min_skore: return
-    s = lead.get("skore",0)
-    cena = f"{lead['cena']:,} €" if lead.get("cena") else "cena neuvedená"
-    plocha = f"  ·  📐 {lead['plocha']} m²" if lead.get("plocha") else ""
-    txt = (f"{'🔥' if s>=85 else '✅'} *{lead['nazov']}*\n"
-           f"💶 {cena}{plocha}\n📁 _{profil_nazov}_  |  {s}%\n📍 {lead.get('zdroj','')}\n")
-    if lead.get("popis"): txt += f"\n_{lead['popis'][:180]}_\n"
-    if lead.get("url"):   txt += f"\n[Zobraziť →]({lead['url']})"
+def posli_discord(lead, profil_nazov):
+    """Pošle lead do Discord kanála cez webhook — embed karta."""
+    if not DISCORD_WEBHOOK_URL: return
+    if lead.get("skore", 0) < DISCORD_MIN_SKORE: return
+    s    = lead.get("skore", 0)
+    cena = f"{lead['cena']:,} €" if lead.get("cena") else "neuvedená"
+    farba = 0x1D9E75 if s >= 85 else 0x3B82F6   # zelená / modrá
+    embed = {
+        "title": lead.get("nazov", "")[:256],
+        "url":   lead.get("url", ""),
+        "color": farba,
+        "fields": [
+            {"name": "💶 Cena",    "value": cena,                              "inline": True},
+            {"name": "📐 Plocha",  "value": f"{lead['plocha']} m²" if lead.get("plocha") else "—", "inline": True},
+            {"name": "🎯 Skóre",  "value": f"{s} %",                          "inline": True},
+            {"name": "📁 Profil", "value": profil_nazov,                       "inline": True},
+            {"name": "🏠 Zdroj",  "value": lead.get("zdroj", "—"),            "inline": True},
+        ],
+        "description": lead.get("popis", "")[:300] or "",
+        "footer": {"text": f"Realitný scanner • {datetime.now().strftime('%d.%m.%Y %H:%M')}"},
+    }
     try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id":TELEGRAM_CHAT_ID,"text":txt,"parse_mode":"Markdown","disable_web_page_preview":False},
+        requests.post(DISCORD_WEBHOOK_URL,
+            json={"embeds": [embed]},
             timeout=10)
-    except: pass
+    except Exception as e:
+        _log(f"Discord chyba: {e}", "warn")
 
 
 # ============================================================
@@ -556,7 +603,7 @@ def scan_profil(profil):
     _log(f"[{nazov}] ✅ {len(leady)} leadov")
 
     for lead in leady:
-        posli_telegram(lead, nazov, profil.get("tg_min_skore",70))
+        posli_discord(lead, nazov)
         time.sleep(0.2)
 
 
@@ -807,7 +854,7 @@ a.ext:hover{text-decoration:underline}
           <option value="60">1 hodina</option>
         </select>
       </div>
-      <div class="fi"><label>Telegram min. skóre (%)</label>
+      <div class="fi"><label>Discord min. skóre (%)</label>
         <input id="f-tg" type="number" value="70" min="0" max="100">
       </div>
     </div>
@@ -1332,7 +1379,7 @@ function openModal(p=null){
   G('f-vyl').value=(p?.kriteria?.vyluc_slova||['suterén','dražba','exekúcia']).join(', ');
   G('f-ai').value=p?.kriteria?.ai_pokyn||'';
   G('f-int').value=p?.interval_min||10;
-  G('f-tg').value=p?.tg_min_skore||70;
+  G('f-tg').value=p?.discord_min_skore||70;
   _setChips('f-stav', p?.kriteria?.stav||[]);
   const izby=String(p?.kriteria?.min_izby||2);
   document.querySelectorAll('#f-izby-chips .chip').forEach(c=>c.classList.toggle('on',c.dataset.v===izby));
@@ -1358,7 +1405,7 @@ async function uloz(){
   const pid=G('f-pid').value||null;
   const body={pid,nazov,
     interval_min:+G('f-int').value||10,
-    tg_min_skore:+G('f-tg').value||70,
+    discord_min_skore:+G('f-tg').value||70,
     zdroje,
     kriteria:{
       typ:G('f-typ').value,
@@ -1460,7 +1507,7 @@ def api_uloz():
         if not d: return jsonify({"ok":False,"error":"Žiadne dáta"}), 400
         pid = d.get("pid") or _gid(d.get("nazov","profil"))
         db_uloz_profil(pid, d["nazov"], d["kriteria"], d["zdroje"],
-                       d.get("interval_min",10), d.get("tg_min_skore",70))
+                       d.get("interval_min",10), d.get("discord_min_skore",70))
         _seen_cache.pop(pid, None)
         _next_scan[pid] = 0
         return jsonify({"ok":True,"pid":pid})
