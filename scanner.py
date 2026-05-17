@@ -1110,11 +1110,10 @@ function selectLokalita(name, slug){
   G('lok-selected').textContent='✓ '+name;
 }
 
-// Zatvor dropdown kliknutím mimo
+// Zatvor dropdown + chip toggling — jeden listener
 document.addEventListener('click',e=>{
   if(!e.target.closest('#f-lok-search') && !e.target.closest('#lok-dropdown'))
     G('lok-dropdown') && (G('lok-dropdown').style.display='none');
-});
   const chip=e.target.closest('.chip');
   if(!chip) return;
   const row=chip.closest('.chip-row');
