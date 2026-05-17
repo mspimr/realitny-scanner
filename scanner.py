@@ -280,20 +280,40 @@ _TYP_TR = {
 }
 
 def _url_zdroja(profil, zk):
-    k   = profil["kriteria"]
-    typ = k.get("typ","any")
-    lok = k.get("lokalita","")
-    slug = _slug(lok)
+    k      = profil["kriteria"]
+    typ    = k.get("typ", "any")
+    ponuka = k.get("ponuka", "predaj")
+    lok    = k.get("lokalita", "")
+    slug   = _slug(lok)
+
+    # Mapovanie typov na nehnutelnosti.sk URL segmenty
+    _NH_TYP = {
+        "byt":"byty","1-izbovy-byt":"1-izbove-byty","2-izbovy-byt":"2-izbove-byty",
+        "3-izbovy-byt":"3-izbove-byty","4-izbovy-byt":"4-izbove-byty",
+        "5-a-viac-izbovy-byt":"5-a-viac-izbove-byty",
+        "dom":"domy","vila":"vily","chalupa":"chaty-chalupy",
+        "pozemok":"pozemky","stavebny-pozemok":"stavebne-pozemky",
+        "kancelarsky-priestor":"kancelarske-priestory",
+        "obchodny-priestor":"obchodne-priestory","any":"byty",
+    }
+    # Mapovanie ponuky
+    _NH_PONUKA = {"predaj":"predaj","prenajom":"prenajom","dopyt":"dopyt"}
+
     if zk == "nehnutelnosti":
-        kat = _TYP_NH.get(typ,"byty")
-        return f"https://www.nehnutelnosti.sk/vysledky/{kat}/{slug}/predaj"
+        kat    = _NH_TYP.get(typ, "byty")
+        pon    = _NH_PONUKA.get(ponuka, "predaj")
+        return f"https://www.nehnutelnosti.sk/vysledky/{kat}/{slug}/{pon}"
+
     if zk == "topreality":
-        typy = _TYP_TR.get(typ,_TYP_TR["any"])
-        return f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&{typy}&location={slug}&transaction=1"
+        typy = _TYP_TR.get(typ if typ in _TYP_TR else ("byt" if "byt" in typ else ("dom" if "dom" in typ else "any")), _TYP_TR["any"])
+        tr_ponuka = "1" if ponuka == "predaj" else "2"
+        return f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&{typy}&location={slug}&transaction={tr_ponuka}"
+
     if zk == "bazos":
-        if typ=="byt": return f"https://reality.bazos.sk/predaj/byt/?hledat={slug}"
-        if typ=="dom": return f"https://reality.bazos.sk/predaj/dom/?hledat={slug}"
+        if "byt" in typ: return f"https://reality.bazos.sk/predaj/byt/?hledat={slug}"
+        if "dom" in typ or "vila" in typ or "chalupa" in typ: return f"https://reality.bazos.sk/predaj/dom/?hledat={slug}"
         return f"https://reality.bazos.sk/predaj/?hledat={slug}"
+
     return ""
 
 
@@ -678,36 +698,115 @@ a.ext:hover{text-decoration:underline}
   <div class="mbox">
     <h2 id="mt">Nový profil</h2>
     <input type="hidden" id="f-pid">
+
     <div class="fg">
-      <div class="fi fw"><label>Názov profilu *</label><input id="f-nazov" placeholder="napr. Byty Liptov"></div>
-      <div class="fi"><label>Typ</label><select id="f-typ"><option value="byt">Byt</option><option value="dom">Dom</option><option value="pozemok">Pozemok</option><option value="any">Akýkoľvek</option></select></div>
-      <div class="fi"><label>Lokalita *</label><input id="f-lok" placeholder="napr. Liptov"></div>
-      <div class="fi"><label>Min. cena (€)</label><input id="f-minc" type="number" placeholder="0"></div>
-      <div class="fi"><label>Max. cena (€)</label><input id="f-maxc" type="number" placeholder="200000"></div>
-      <div class="fi"><label>Min. plocha (m²)</label><input id="f-mina" type="number" placeholder="50"></div>
-      <div class="fi"><label>Max. plocha (m²)</label><input id="f-maxa" type="number" placeholder="200"></div>
-      <div class="fi"><label>Min. izby</label><select id="f-izby"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></div>
-      <div class="fi"><label>Interval skenovania</label><select id="f-int"><option value="5">5 min</option><option value="10" selected>10 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="60">1 hod</option></select></div>
+      <div class="fi fw"><label>Názov profilu *</label>
+        <input id="f-nazov" placeholder="napr. Byty Liptov, Domy Ružomberok…">
+      </div>
     </div>
+
+    <div class="sec">Kde · Čo · Ponuka</div>
+    <div class="fg">
+      <div class="fi fw"><label>Lokalita * (mesto, okres alebo kraj)</label>
+        <input id="f-lok" placeholder="napr. Liptovský Mikuláš, Ružomberok, Liptov">
+      </div>
+      <div class="fi"><label>Typ nehnuteľnosti</label>
+        <select id="f-typ">
+          <option value="byt">Byt (všetky)</option>
+          <option value="1-izbovy-byt">1-izbový byt</option>
+          <option value="2-izbovy-byt">2-izbový byt</option>
+          <option value="3-izbovy-byt">3-izbový byt</option>
+          <option value="4-izbovy-byt">4-izbový byt</option>
+          <option value="5-a-viac-izbovy-byt">5+ izbový byt</option>
+          <option value="dom">Rodinný dom</option>
+          <option value="vila">Vila</option>
+          <option value="chalupa">Chalupa / chata</option>
+          <option value="pozemok">Pozemok</option>
+          <option value="stavebny-pozemok">Stavebný pozemok</option>
+          <option value="kancelarsky-priestor">Kancelársky priestor</option>
+          <option value="obchodny-priestor">Obchodný priestor</option>
+          <option value="any">Akýkoľvek</option>
+        </select>
+      </div>
+      <div class="fi"><label>Ponuka</label>
+        <select id="f-ponuka">
+          <option value="predaj">Predaj</option>
+          <option value="prenajom">Prenájom</option>
+          <option value="dopyt">Dopyt</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="sec">Cena a výmera</div>
+    <div class="fg">
+      <div class="fi"><label>Cena od (€)</label><input id="f-minc" type="number" placeholder="0" min="0"></div>
+      <div class="fi"><label>Cena do (€)</label><input id="f-maxc" type="number" placeholder="200000" min="0"></div>
+      <div class="fi"><label>Plocha od (m²)</label><input id="f-mina" type="number" placeholder="0" min="0"></div>
+      <div class="fi"><label>Plocha do (m²)</label><input id="f-maxa" type="number" placeholder="500" min="0"></div>
+    </div>
+
+    <div class="sec">Stav nehnuteľnosti</div>
+    <div class="chip-row" id="f-stav">
+      <span class="chip" data-v="novostavba">Novostavba</span>
+      <span class="chip" data-v="kompletna-rekonstrukcia">Kompletná rekonštrukcia</span>
+      <span class="chip" data-v="castocna-rekonstrukcia">Čiastočná rekonštrukcia</span>
+      <span class="chip" data-v="povodny-stav">Pôvodný stav</span>
+      <span class="chip" data-v="holodom">Holodom / holobyt</span>
+    </div>
+
+    <div class="sec">Počet izieb (min)</div>
+    <div class="chip-row" id="f-izby-chips">
+      <span class="chip" data-v="1">1+</span>
+      <span class="chip on" data-v="2">2+</span>
+      <span class="chip" data-v="3">3+</span>
+      <span class="chip" data-v="4">4+</span>
+      <span class="chip" data-v="5">5+</span>
+    </div>
+
+    <div class="sec">Vlastnosti</div>
+    <div class="chip-row" id="f-vlastnosti">
+      <span class="chip" data-v="balkón">Balkón</span>
+      <span class="chip" data-v="terasa">Terasa</span>
+      <span class="chip" data-v="záhrada">Záhrada</span>
+      <span class="chip" data-v="garáž">Garáž</span>
+      <span class="chip" data-v="parking">Parkovanie</span>
+      <span class="chip" data-v="výťah">Výťah</span>
+      <span class="chip" data-v="pivnica">Pivnica</span>
+      <span class="chip" data-v="klimatizácia">Klimatizácia</span>
+    </div>
+
     <div class="sec">Zdroje</div>
     <div class="chip-row" id="f-zdroje">
       <span class="chip on" data-v="nehnutelnosti">nehnutelnosti.sk</span>
       <span class="chip on" data-v="topreality">topreality.sk</span>
       <span class="chip"    data-v="bazos">bazos.sk</span>
     </div>
-    <div class="sec">Kľúčové slová</div>
+
+    <div class="sec">Ďalšie nastavenia</div>
     <div class="fg">
-      <div class="fi"><label>Preferované (čiarkami)</label><input id="f-pref" placeholder="rekonštrukci,záhrada,garáž"></div>
-      <div class="fi"><label>Vylúčiť (čiarkami)</label><input id="f-vyl" placeholder="suterén,dražba"></div>
-      <div class="fi fw"><label>AI pokyn</label><textarea id="f-ai" placeholder="Uprednostni novostavby s parkovaním..."></textarea></div>
+      <div class="fi"><label>Vylúčiť slová (čiarkami)</label>
+        <input id="f-vyl" placeholder="suterén, dražba, exekúcia">
+      </div>
+      <div class="fi"><label>AI pokyn (voľný text)</label>
+        <input id="f-ai" placeholder="Uprednostni novostavby pri prírode…">
+      </div>
+      <div class="fi"><label>Interval skenovania</label>
+        <select id="f-int">
+          <option value="5">5 minút</option>
+          <option value="10" selected>10 minút</option>
+          <option value="15">15 minút</option>
+          <option value="30">30 minút</option>
+          <option value="60">1 hodina</option>
+        </select>
+      </div>
+      <div class="fi"><label>Telegram min. skóre (%)</label>
+        <input id="f-tg" type="number" value="70" min="0" max="100">
+      </div>
     </div>
-    <div class="sec">Notifikácie</div>
-    <div class="fg">
-      <div class="fi"><label>Telegram min. skóre (%)</label><input id="f-tg" type="number" value="70" min="0" max="100"></div>
-    </div>
+
     <div class="fa">
       <button class="btn" onclick="closeModal()">Zrušiť</button>
-      <button class="btn btn-ok" id="btn-save" onclick="uloz()">💾 Uložiť</button>
+      <button class="btn btn-ok" id="btn-save" onclick="uloz()">💾 Uložiť profil</button>
       <button class="btn btn-danger" id="btn-del" style="display:none" onclick="zmazat()">🗑 Zmazať</button>
     </div>
   </div>
@@ -721,7 +820,7 @@ const post = (u,b) => fetch(u+'?token='+TOKEN,{method:'POST',headers:{'Content-T
 
 let profily=[], activePid=null;
 
-function toast(msg,ok=true){const t=G('toast');t.textContent=msg;t.style.background=ok?'#1D9E75':'#c00';t.style.display='block';setTimeout(()=>t.style.display='none',3000)}
+function toast(msg,ok=true){const t=G('toast');t.textContent=msg;t.style.background=ok?'#1D9E75':'#c00';t.style.display='block';setTimeout(()=>t.style.display='none',3500)}
 
 async function reload(){
   profily=await api('/api/profily');
@@ -737,7 +836,7 @@ function renderTabs(){
     const b=document.createElement('button');
     b.className='tab-btn'+(p.id===activePid?' active':'')+(!p.aktivny?' paused':'');
     b.dataset.pid=p.id;
-    b.innerHTML=`${p.nazov}<span class="cnt" id="cnt-${p.id}">…</span><span class="tab-x" title="Zmazať profil" onclick="zmazatTab(event,'${p.id}','${p.nazov.replace(/'/g,"\\'")}')">×</span>`;
+    b.innerHTML=`${p.nazov}<span class="cnt" id="cnt-${p.id}">…</span><span class="tab-x" title="Zmazať" onclick="zmazatTab(event,'${p.id}','${p.nazov.replace(/'/g,"\\'")}')">×</span>`;
     b.onclick=(e)=>{ if(!e.target.classList.contains('tab-x')) switchTab(p.id,true); };
     bar.insertBefore(b,add);
   });
@@ -747,10 +846,8 @@ async function switchTab(pid,doRef=true){
   activePid=pid;
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.pid===pid));
   if(!G('pane-'+pid)){
-    const d=document.createElement('div');
-    d.className='pane';d.id='pane-'+pid;
-    d.innerHTML=buildPane(pid);
-    G('panes').appendChild(d);
+    const d=document.createElement('div');d.className='pane';d.id='pane-'+pid;
+    d.innerHTML=buildPane(pid);G('panes').appendChild(d);
   }
   document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
   G('pane-'+pid).classList.add('active');
@@ -793,7 +890,7 @@ async function refreshPane(pid){
 
 function renderLeads(pid,leads){
   const el=G('leads-'+pid);
-  if(!leads.length){el.innerHTML='<div class="empty">Žiadne leady.<br><small style="color:#ddd">Scanner beží a zbiera výsledky.</small></div>';return;}
+  if(!leads.length){el.innerHTML='<div class="empty">Žiadne leady.<br><small style="color:#ddd">Scanner zbiera výsledky.</small></div>';return;}
   el.innerHTML=leads.map(l=>{
     const cena=l.cena?l.cena.toLocaleString('sk-SK')+' €':'—';
     const plocha=l.plocha?` · ${l.plocha} m²`:'';
@@ -810,24 +907,43 @@ function renderLeads(pid,leads){
   }).join('');
 }
 
+// Chip toggling — izby = single select, ostatné = multi
+document.addEventListener('click',e=>{
+  const chip=e.target.closest('.chip');
+  if(!chip) return;
+  const row=chip.closest('.chip-row');
+  if(!row) return;
+  if(row.id==='f-izby-chips'){
+    row.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+    chip.classList.add('on');
+  } else {
+    chip.classList.toggle('on');
+  }
+});
+
+function _chips(id){return[...document.querySelectorAll(`#${id} .chip.on`)].map(c=>c.dataset.v);}
+function _setChips(id,vals){document.querySelectorAll(`#${id} .chip`).forEach(c=>c.classList.toggle('on',vals.includes(c.dataset.v)));}
+
 function openModal(p=null){
   G('mt').textContent=p?'Upraviť profil':'Nový profil';
   G('f-pid').value=p?.id||'';
   G('f-nazov').value=p?.nazov||'';
   G('f-typ').value=p?.kriteria?.typ||'byt';
+  G('f-ponuka').value=p?.kriteria?.ponuka||'predaj';
   G('f-lok').value=p?.kriteria?.lokalita||'';
   G('f-minc').value=p?.kriteria?.min_cena||'';
-  G('f-maxc').value=p?.kriteria?.max_cena||200000;
-  G('f-mina').value=p?.kriteria?.min_plocha||50;
-  G('f-maxa').value=p?.kriteria?.max_plocha||200;
-  G('f-izby').value=p?.kriteria?.min_izby||2;
-  G('f-int').value=p?.interval_min||10;
-  G('f-pref').value=(p?.kriteria?.prefer_slova||['rekonštrukci','novostavba','záhrada','garáž']).join(',');
-  G('f-vyl').value=(p?.kriteria?.vyluc_slova||['suterén','dražba']).join(',');
+  G('f-maxc').value=p?.kriteria?.max_cena||'';
+  G('f-mina').value=p?.kriteria?.min_plocha||'';
+  G('f-maxa').value=p?.kriteria?.max_plocha||'';
+  G('f-vyl').value=(p?.kriteria?.vyluc_slova||['suterén','dražba','exekúcia']).join(', ');
   G('f-ai').value=p?.kriteria?.ai_pokyn||'';
+  G('f-int').value=p?.interval_min||10;
   G('f-tg').value=p?.tg_min_skore||70;
-  document.querySelectorAll('#f-zdroje .chip').forEach(c=>
-    c.classList.toggle('on',p?(p.zdroje||[]).includes(c.dataset.v):['nehnutelnosti','topreality'].includes(c.dataset.v)));
+  _setChips('f-stav', p?.kriteria?.stav||[]);
+  const izby=String(p?.kriteria?.min_izby||2);
+  document.querySelectorAll('#f-izby-chips .chip').forEach(c=>c.classList.toggle('on',c.dataset.v===izby));
+  _setChips('f-vlastnosti', p?.kriteria?.prefer_slova||[]);
+  _setChips('f-zdroje', p?.zdroje||['nehnutelnosti','topreality']);
   G('btn-del').style.display=p?'':'none';
   G('overlay').style.display='block';
 }
@@ -835,54 +951,71 @@ function openModal(p=null){
 function editProfil(pid){openModal(profily.find(p=>p.id===pid));}
 function closeModal(){G('overlay').style.display='none';}
 
-document.addEventListener('click',e=>{
-  if(e.target.classList.contains('chip')&&e.target.closest('#f-zdroje'))
-    e.target.classList.toggle('on');
-});
-
 async function uloz(){
   const nazov=G('f-nazov').value.trim(), lok=G('f-lok').value.trim();
   if(!nazov){toast('Zadaj názov profilu',false);return;}
   if(!lok){toast('Zadaj lokalitu',false);return;}
-  const zdroje=[...document.querySelectorAll('#f-zdroje .chip.on')].map(c=>c.dataset.v);
+  const zdroje=_chips('f-zdroje');
   if(!zdroje.length){toast('Vyber aspoň jeden zdroj',false);return;}
+  const izbyChip=document.querySelector('#f-izby-chips .chip.on');
   const pid=G('f-pid').value||null;
   const body={pid,nazov,
-    interval_min:+G('f-int').value, tg_min_skore:+G('f-tg').value, zdroje,
-    kriteria:{typ:G('f-typ').value,lokalita:lok,
-      min_cena:+G('f-minc').value||0, max_cena:+G('f-maxc').value||999999,
-      min_plocha:+G('f-mina').value||0, max_plocha:+G('f-maxa').value||9999,
-      min_izby:+G('f-izby').value||1,
-      prefer_slova:G('f-pref').value.split(',').map(s=>s.trim()).filter(Boolean),
-      vyluc_slova:G('f-vyl').value.split(',').map(s=>s.trim()).filter(Boolean),
-      ai_pokyn:G('f-ai').value.trim()}};
-  G('btn-save').textContent='Ukladám…'; G('btn-save').disabled=true;
+    interval_min:+G('f-int').value||10,
+    tg_min_skore:+G('f-tg').value||70,
+    zdroje,
+    kriteria:{
+      typ:G('f-typ').value,
+      ponuka:G('f-ponuka').value,
+      lokalita:lok,
+      min_cena:+G('f-minc').value||0,
+      max_cena:+G('f-maxc').value||999999,
+      min_plocha:+G('f-mina').value||0,
+      max_plocha:+G('f-maxa').value||9999,
+      min_izby:izbyChip?+izbyChip.dataset.v:1,
+      stav:_chips('f-stav'),
+      prefer_slova:_chips('f-vlastnosti'),
+      vyluc_slova:G('f-vyl').value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean),
+      ai_pokyn:G('f-ai').value.trim(),
+    }};
+  G('btn-save').textContent='Ukladám…';G('btn-save').disabled=true;
   try{
     const res=await post('/api/profil/uloz',body);
-    if(res.ok){
-      closeModal(); activePid=res.pid;
-      const old=G('pane-'+res.pid); if(old) old.remove();
-      await reload(); toast('Profil uložený ✓');
-    } else { toast('Chyba: '+(res.error||'neznáma'),false); }
-  } catch(e){ toast('Sieťová chyba: '+e.message,false); }
-  G('btn-save').textContent='💾 Uložiť'; G('btn-save').disabled=false;
+    if(res.ok){closeModal();activePid=res.pid;const old=G('pane-'+res.pid);if(old)old.remove();await reload();toast('Profil uložený ✓');}
+    else toast('Chyba: '+(res.error||'neznáma'),false);
+  }catch(e){toast('Sieťová chyba: '+e.message,false);}
+  G('btn-save').textContent='💾 Uložiť profil';G('btn-save').disabled=false;
+}
+
+function closeConfirm(){G('confirm-overlay').classList.remove('show');}
+
+function _confirmDelete(pid,nazov,onOk){
+  G('confirm-msg').textContent=`Zmazať profil "${nazov}" aj so všetkými leadmi? Akcia sa nedá vrátiť späť.`;
+  G('confirm-overlay').classList.add('show');
+  G('confirm-ok').onclick=async()=>{closeConfirm();await onOk();};
 }
 
 async function zmazat(){
   const pid=G('f-pid').value;
-  if(!pid||!confirm('Zmazať profil aj so všetkými leadmi?')) return;
-  const res=await post('/api/profil/zmazat',{pid});
-  if(res.ok){
-    closeModal(); const old=G('pane-'+pid); if(old) old.remove();
-    activePid=null; await reload(); toast('Profil zmazaný');
-  }
+  if(!pid) return;
+  _confirmDelete(pid,G('f-nazov').value,async()=>{
+    const res=await post('/api/profil/zmazat',{pid});
+    if(res.ok){closeModal();const old=G('pane-'+pid);if(old)old.remove();activePid=null;await reload();toast('Profil zmazaný');}
+  });
+}
+
+function zmazatTab(e,pid,nazov){
+  e.stopPropagation();
+  _confirmDelete(pid,nazov,async()=>{
+    const res=await post('/api/profil/zmazat',{pid});
+    if(res.ok){const old=G('pane-'+pid);if(old)old.remove();if(activePid===pid)activePid=null;await reload();toast('Profil zmazaný');}
+  });
 }
 
 async function toggle(pid){
   const res=await post('/api/profil/toggle',{pid});
   if(res.ok){
     const p=profily.find(x=>x.id===pid);
-    if(p){p.aktivny=res.aktivny; renderTabs();}
+    if(p){p.aktivny=res.aktivny;renderTabs();}
     const tog=G('tog-'+pid);
     if(tog) tog.textContent=res.aktivny?'⏸ Pozastaviť':'▶ Spustiť';
   }
