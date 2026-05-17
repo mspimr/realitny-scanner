@@ -172,6 +172,14 @@ def db_zmazat_profil(pid):
             cur.execute(f"DELETE FROM {tbl} WHERE {col}={PH}", (pid,))
 
 
+def db_profil(pid):
+    with get_db() as con:
+        cur = con.cursor()
+        cur.execute(f"SELECT * FROM profiles WHERE id={PH}", (pid,))
+        r = cur.fetchone()
+    return _pp(_r(r)) if r else None
+
+
 def db_toggle_profil(pid):
     with get_db() as con:
         cur = con.cursor()
@@ -891,13 +899,62 @@ def api_stats(pid):
     return jsonify(db_stats(pid))
 
 
+@app.route("/api/scan-now/<pid>", methods=["POST"])
+def api_scan_now(pid):
+    """Manuálny okamžitý scan profilu — na testovanie."""
+    check_auth()
+    profil = db_profil(pid)
+    if not profil:
+        return jsonify({"ok": False, "error": "Profil nenájdený"}), 404
+    try:
+        _seen_cache.pop(pid, None)
+        scan_profil(profil)
+        return jsonify({"ok": True, "stats": db_stats(pid)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/scan-now", methods=["POST"])
+def api_scan_all():
+    """Manuálny scan všetkých aktívnych profilov."""
+    check_auth()
+    results = {}
+    for p in db_vsetky_profily():
+        if not p["aktivny"]: continue
+        try:
+            _seen_cache.pop(p["id"], None)
+            scan_profil(p)
+            results[p["nazov"]] = "ok"
+        except Exception as e:
+            results[p["nazov"]] = str(e)
+    return jsonify({"ok": True, "results": results})
+
+
 # ============================================================
-#  ŠTART
+#  ŠTART — spustí scheduler pri každom načítaní modulu
+#  (funguje aj s gunicorn, nielen python scanner.py)
 # ============================================================
 
-if __name__ == "__main__":
+def _start_scheduler():
+    """Spustí scheduler thread raz — chráni pred viacnásobným spustením."""
+    import os
+    # Gunicorn fork guard — spusti len v worker procese, nie v master
+    if os.environ.get("_SCANNER_STARTED"):
+        return
+    os.environ["_SCANNER_STARTED"] = "1"
+    t = threading.Thread(target=scheduler_loop, daemon=True, name="scanner-scheduler")
+    t.start()
+    _log("Scheduler spustený ✅")
+
+
+try:
     init_db()
-    threading.Thread(target=scheduler_loop, daemon=True).start()
+    _start_scheduler()
+except Exception as e:
+    _log(f"Chyba pri štarte: {e}", "err")
+
+
+if __name__ == "__main__":
     _log(f"Dashboard: http://localhost:5000?token={DASHBOARD_PASSWORD}")
     _log(f"DB: {'PostgreSQL' if USE_PG else 'SQLite (lokálne)'}")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT",5000)), debug=False)
