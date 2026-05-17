@@ -250,76 +250,132 @@ def db_uloz_log(profil_id, naskenov, nove, leady_count):
 #  PARSERY
 # ============================================================
 
+# Mapa lokalít → nehnutelnosti.sk URL slug
+_LOK_SLUG = {
+    "liptov":"liptovsky-mikulas","liptovsky mikulas":"liptovsky-mikulas",
+    "liptovský mikuláš":"liptovsky-mikulas","liptovska osada":"liptovska-osada",
+    "ruzomberok":"ruzomberok","ružomberok":"ruzomberok",
+    "martin":"martin","zilina":"zilina","žilina":"zilina",
+    "bratislava":"bratislava","kosice":"kosice","košice":"kosice",
+    "poprad":"poprad","banska bystrica":"banska-bystrica",
+    "banská bystrica":"banska-bystrica","trencin":"trencin","trenčín":"trencin",
+    "nitra":"nitra","presov":"presov","prešov":"presov","trnava":"trnava",
+    "zvolen":"zvolen","prievidza":"prievidza","nove zamky":"nove-zamky",
+}
+
+def _slug(lok):
+    l = lok.lower().strip()
+    if l in _LOK_SLUG: return _LOK_SLUG[l]
+    for k,v in _LOK_SLUG.items():
+        if k in l or l in k: return v
+    tr = str.maketrans("áäčďéíľĺňóôŕšťúůýž ","aacdeillnoorstuuyz-")
+    return l.translate(tr)
+
+_TYP_NH = {"byt":"byty","dom":"domy","pozemok":"pozemky","any":"byty"}
+_TYP_TR = {
+    "byt":"type%5B%5D=101&type%5B%5D=102&type%5B%5D=103&type%5B%5D=104",
+    "dom":"type%5B%5D=111&type%5B%5D=112&type%5B%5D=113",
+    "pozemok":"type%5B%5D=301&type%5B%5D=302",
+    "any":"type%5B%5D=101&type%5B%5D=102&type%5B%5D=111&type%5B%5D=112",
+}
+
 def _url_zdroja(profil, zk):
     k   = profil["kriteria"]
-    lok = k.get("lokalita","").replace(" ","-").lower()
     typ = k.get("typ","any")
-    tbl = {
-        "nehnutelnosti": {
-            "byt":  f"https://www.nehnutelnosti.sk/vysledky/byty/{lok}/predaj",
-            "dom":  f"https://www.nehnutelnosti.sk/vysledky/domy/{lok}/predaj",
-            "any":  f"https://www.nehnutelnosti.sk/vysledky/byty/{lok}/predaj",
-        },
-        "topreality": {
-            "byt":  f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&type%5B%5D=101&type%5B%5D=102&location={lok}&transaction=1",
-            "dom":  f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&type%5B%5D=111&location={lok}&transaction=1",
-            "any":  f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&location={lok}&transaction=1",
-        },
-        "bazos": {
-            "byt":  f"https://reality.bazos.sk/predaj/byt/?hledat={lok}",
-            "dom":  f"https://reality.bazos.sk/predaj/dom/?hledat={lok}",
-            "any":  f"https://reality.bazos.sk/predaj/?hledat={lok}",
-        },
-    }
-    src = tbl.get(zk, {})
-    return src.get(typ) or src.get("any","")
+    lok = k.get("lokalita","")
+    slug = _slug(lok)
+    if zk == "nehnutelnosti":
+        kat = _TYP_NH.get(typ,"byty")
+        return f"https://www.nehnutelnosti.sk/vysledky/{kat}/{slug}/predaj"
+    if zk == "topreality":
+        typy = _TYP_TR.get(typ,_TYP_TR["any"])
+        return f"https://www.topreality.sk/vyhladavanie-nehnutelnosti.html?form=1&{typy}&location={slug}&transaction=1"
+    if zk == "bazos":
+        if typ=="byt": return f"https://reality.bazos.sk/predaj/byt/?hledat={slug}"
+        if typ=="dom": return f"https://reality.bazos.sk/predaj/dom/?hledat={slug}"
+        return f"https://reality.bazos.sk/predaj/?hledat={slug}"
+    return ""
 
 
-def _n(el):
-    if not el: return 0
-    t = el.get_text() if hasattr(el,"get_text") else str(el)
-    for c in re.findall(r"[\d\s\xa0]+", t):
+def _ext_cislo(text):
+    for c in re.findall(r"[\d\s\xa0]+", str(text)):
         c = c.replace(" ","").replace("\xa0","")
-        if c.isdigit() and len(c)>=3: return int(c)
+        if c.isdigit() and len(c)>=2: return int(c)
     return 0
 
 
 def parse_nehnutelnosti(html, src):
-    soup = BeautifulSoup(html,"lxml")
-    karty = soup.select("article.advertisement-item,div.advertisement-item") or soup.select("[class*='advertisement-item']")
-    out = []
-    for k in karty[:40]:
+    """
+    nehnutelnosti.sk — Next.js, inzeráty sú <a href='/detail/ID/nazov'>.
+    Cena a plocha sa ťahajú regex-om z okolitého textu.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    for a in soup.select("a[href*='/detail/']")[:80]:
         try:
-            a = k.select_one("h2 a,h3 a,.advertisement-item__title a,a[class*='title']")
-            if not a: continue
-            url = a.get("href","")
-            if url and not url.startswith("http"): url = "https://www.nehnutelnosti.sk"+url
-            lok = k.select_one("[class*='location'],[class*='locality']")
-            out.append({"zdroj":src,"nazov":a.get_text(strip=True),
-                "cena":_n(k.select_one("[class*='price']")),
-                "plocha":_n(k.select_one("[class*='area']")),
-                "popis":lok.get_text(strip=True)[:300] if lok else "",
-                "url":url,"id":url.split("/")[-2] if url.count("/")>3 else url[-16:]})
+            href = a.get("href","")
+            if not href or href in seen: continue
+            seen.add(href)
+            url = href if href.startswith("http") else "https://www.nehnutelnosti.sk"+href
+            parts = url.rstrip("/").split("/")
+            uid = parts[4] if len(parts)>4 else url[-16:]
+
+            # Nadpis — h2/h3 v najbližšom rodičovskom bloku
+            nazov = ""
+            par = a.find_parent(["article","section","li","div"])
+            if par:
+                h = par.find(["h2","h3"])
+                if h: nazov = h.get_text(strip=True)
+            if not nazov: nazov = a.get_text(strip=True)
+            if len(nazov) < 6: continue
+
+            # Cena a plocha z textu rodiča
+            ptxt = par.get_text(" ", strip=True) if par else ""
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+
+            # Popis — lokalita alebo prvý krátky odsek
+            popis = ""
+            if par:
+                for el in par.select("p,[class*='locat'],[class*='address'],[class*='region']"):
+                    t = el.get_text(strip=True)
+                    if 5 < len(t) < 200 and "€" not in t and "m²" not in t:
+                        popis = t; break
+
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":popis,"url":url,"id":uid})
         except: continue
     return out
 
 
 def parse_topreality(html, src):
     soup = BeautifulSoup(html,"lxml")
-    karty = soup.select(".item,.property-item,article[class*='item']")
+    karty = soup.select(".item,.property-item,article[class*='item'],div[class*='list-item'],li[class*='item']")
     out = []
     for k in karty[:40]:
         try:
-            a = k.select_one("h2 a,h3 a,.title a,a.name")
+            a = k.select_one("h2 a,h3 a,.title a,a.name,a[href*='/nehnutelnost/']")
             if not a: continue
             url = a.get("href","")
             if url and not url.startswith("http"): url = "https://www.topreality.sk"+url
-            lok = k.select_one("[class*='location'],.locality,.address")
-            out.append({"zdroj":src,"nazov":a.get_text(strip=True),
-                "cena":_n(k.select_one(".price,[class*='price']")),
-                "plocha":_n(k.select_one("[class*='area']")),
-                "popis":lok.get_text(strip=True)[:300] if lok else "",
-                "url":url,"id":url.split("/")[-1][:20] if url else ""})
+            ptxt = k.get_text(" ", strip=True)
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+            lok = k.select_one("[class*='location'],.locality,.address,p")
+            popis = lok.get_text(strip=True)[:200] if lok else ""
+            uid = url.rstrip("/").split("/")[-1][:20]
+            nazov = a.get_text(strip=True)
+            if len(nazov) < 5: continue
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":popis,"url":url,"id":uid})
         except: continue
     return out
 
@@ -330,15 +386,19 @@ def parse_bazos(html, src):
     out = []
     for k in karty[:40]:
         try:
-            a = k.select_one("h2 a,.nadpis a")
+            a = k.select_one("h2 a,.nadpis a,h3 a")
             if not a: continue
             url = a.get("href","")
             if url and not url.startswith("http"): url = "https://reality.bazos.sk"+url
+            ptxt = k.get_text(" ", strip=True)
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
             p = k.select_one(".popis,p")
+            popis = p.get_text(strip=True)[:200] if p else ""
+            uid = url.rstrip("/").split("/")[-2] if url.count("/")>3 else url[-16:]
             out.append({"zdroj":src,"nazov":a.get_text(strip=True),
-                "cena":_n(k.select_one(".cena,[class*='cena']")),
-                "plocha":0,"popis":p.get_text(strip=True)[:300] if p else "",
-                "url":url,"id":url.split("/")[-2] if url.count("/")>3 else url[-16:]})
+                        "cena":cena,"plocha":0,"popis":popis,"url":url,"id":uid})
         except: continue
     return out
 
@@ -355,15 +415,14 @@ PARSERY = {
 # ============================================================
 
 def ok_filter(p, k):
-    c,a = p.get("cena",0), p.get("plocha",0)
-    if c and c > k.get("max_cena",9e9): return False
-    if c and c < k.get("min_cena",0):   return False
-    if a and a < k.get("min_plocha",0): return False
-    if a and a > k.get("max_plocha",9e9): return False
-    txt = (p.get("nazov","")+p.get("popis","")).lower()
-    lok = k.get("lokalita","").lower()
-    if lok and lok not in txt: return False
-    for sl in k.get("vyluc_slova",[]): 
+    c, a = p.get("cena",0), p.get("plocha",0)
+    if c and c > k.get("max_cena", 9e9): return False
+    if c and c < k.get("min_cena", 0):   return False
+    if a and a < k.get("min_plocha", 0): return False
+    if a and a > k.get("max_plocha", 9e9): return False
+    # Lokalitu NEkontrolujeme v texte — URL ju už filtruje
+    txt = (p.get("nazov","") + " " + p.get("popis","")).lower()
+    for sl in k.get("vyluc_slova", []):
         if sl.lower() in txt: return False
     return True
 
@@ -583,6 +642,16 @@ a.ext:hover{text-decoration:underline}
 .chip{font-size:12px;padding:4px 11px;border:1px solid #ddd;border-radius:20px;background:#f8f7f4;cursor:pointer;user-select:none}
 .chip.on{background:#111;color:#fff;border-color:#111}
 .fa{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.tab-btn .tab-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:14px;line-height:1;margin-left:5px;color:transparent;transition:background .15s,color .15s;vertical-align:middle}
+.tab-btn:hover .tab-x{color:#888;background:rgba(0,0,0,.08)}
+.tab-btn.active .tab-x{color:#555}
+.tab-btn .tab-x:hover{color:#c00 !important;background:rgba(200,0,0,.12) !important}
+.confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:center;justify-content:center}
+.confirm-overlay.show{display:flex}
+.confirm-box{background:var(--color-background-primary,#fff);border-radius:12px;padding:24px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18)}
+.confirm-box h3{font-size:16px;font-weight:500;margin-bottom:8px;color:var(--color-text-primary,#111)}
+.confirm-box p{font-size:13px;color:var(--color-text-secondary,#666);margin-bottom:20px;line-height:1.5}
+.confirm-actions{display:flex;gap:8px;justify-content:flex-end}
 @media(max-width:580px){.fg{grid-template-columns:1fr}.card-top{flex-direction:column}}
 </style>
 </head>
@@ -593,6 +662,17 @@ a.ext:hover{text-decoration:underline}
 </div>
 <div id="panes"></div>
 <div class="toast" id="toast"></div>
+
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <h3>Zmazať profil?</h3>
+    <p id="confirm-msg">Toto vymaže profil aj všetky jeho leady. Akcia sa nedá vrátiť späť.</p>
+    <div class="confirm-actions">
+      <button class="btn" onclick="closeConfirm()">Zrušiť</button>
+      <button class="btn btn-danger" id="confirm-ok">🗑 Zmazať</button>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
   <div class="mbox">
@@ -657,8 +737,8 @@ function renderTabs(){
     const b=document.createElement('button');
     b.className='tab-btn'+(p.id===activePid?' active':'')+(!p.aktivny?' paused':'');
     b.dataset.pid=p.id;
-    b.innerHTML=`${p.nazov}<span class="cnt" id="cnt-${p.id}">…</span>`;
-    b.onclick=()=>switchTab(p.id,true);
+    b.innerHTML=`${p.nazov}<span class="cnt" id="cnt-${p.id}">…</span><span class="tab-x" title="Zmazať profil" onclick="zmazatTab(event,'${p.id}','${p.nazov.replace(/'/g,"\\'")}')">×</span>`;
+    b.onclick=(e)=>{ if(!e.target.classList.contains('tab-x')) switchTab(p.id,true); };
     bar.insertBefore(b,add);
   });
 }
