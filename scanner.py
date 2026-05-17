@@ -120,7 +120,7 @@ def init_db():
                 "vyluc_slova":["suterén","dražba"],
                 "ai_pokyn":"Uprednostni ponuky po rekonštrukcii alebo novostavby s parkovaním."},
                 ensure_ascii=False)
-            z = json.dumps(["nehnutelnosti","topreality"])
+            z = json.dumps(["nehnutelnosti","topreality","reality","haloreality","bezrealitky","zoznamrealit","bazos"])
             cur.execute(
                 f"INSERT INTO profiles (id,nazov,kriteria,zdroje,aktivny,interval_min,discord_min_skore,vytvoreny)"
                 f" VALUES ({PH},{PH},{PH},{PH},1,10,70,{PH})",
@@ -314,6 +314,27 @@ def _url_zdroja(profil, zk):
         if "dom" in typ or "vila" in typ or "chalupa" in typ: return f"https://reality.bazos.sk/predaj/dom/?hledat={slug}"
         return f"https://reality.bazos.sk/predaj/?hledat={slug}"
 
+    if zk == "reality":
+        kat = _TYP_NH.get(typ, "byty")
+        pon = _NH_PONUKA.get(ponuka, "predaj")
+        return f"https://www.reality.sk/{kat}/{slug}/{pon}/"
+
+    if zk == "bezrealitky":
+        cat_map = {"byt":"byt","dom":"dum","pozemok":"pozemok","any":"byt"}
+        tr_map  = {"predaj":"prodej","prenajom":"pronajem","dopyt":"pronajem"}
+        cat = cat_map.get(typ if typ in cat_map else "byt", "byt")
+        tr  = tr_map.get(ponuka, "prodej")
+        return f"https://www.bezrealitky.sk/sk/vypis/?category={cat}&transaction={tr}&region={slug}"
+
+    if zk == "zoznamrealit":
+        kat = _TYP_NH.get(typ, "byty")
+        return f"https://www.zoznamrealit.sk/nehnutelnosti/?typ={kat}&lokalita={slug}&transakcia={ponuka}"
+
+    if zk == "haloreality":
+        kat = _TYP_NH.get(typ, "byty")
+        pon = _NH_PONUKA.get(ponuka, "predaj")
+        return f"https://www.haloreality.sk/{kat}/{pon}/{slug}/"
+
     return ""
 
 
@@ -423,10 +444,147 @@ def parse_bazos(html, src):
     return out
 
 
+def parse_reality_sk(html, src):
+    """Parser pre reality.sk — klasický HTML portál."""
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    # reality.sk používa article alebo div s triedou obsahujúcou 'offer' alebo 'property'
+    karty = (soup.select("article[class*='offer'],div[class*='offer'],div[class*='property']")
+             or soup.select("a[href*='/byty/'],a[href*='/domy/'],a[href*='/pozemky/']"))
+    # Fallback — všetky linky na detail
+    if not karty:
+        karty = soup.select("a[href*='reality.sk/']")
+    for k in karty[:50]:
+        try:
+            a = k if k.name == "a" else k.select_one("h2 a,h3 a,a[class*='title'],a")
+            if not a: continue
+            url = a.get("href","")
+            if not url or url in seen: continue
+            seen.add(url)
+            if url and not url.startswith("http"): url = "https://www.reality.sk" + url
+            if "reality.sk" not in url: continue
+            nazov = a.get_text(strip=True)
+            if len(nazov) < 6: continue
+            par = k.find_parent(["article","div","li"]) if k.name == "a" else k
+            ptxt = par.get_text(" ", strip=True) if par else nazov
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+            uid = url.rstrip("/").split("/")[-1][:24]
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":"","url":url,"id":"rs_"+uid})
+        except: continue
+    return out
+
+
+def parse_bezrealitky(html, src):
+    """Parser pre bezrealitky.sk — priamy predaj bez makléra."""
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    karty = soup.select("article,div[class*='property'],div[class*='listing'],div[class*='card']")
+    if not karty:
+        karty = soup.select("a[href*='/detail/']")
+    for k in karty[:40]:
+        try:
+            a = k if k.name == "a" else k.select_one("a[href*='/detail/'],h2 a,h3 a")
+            if not a: continue
+            url = a.get("href","")
+            if not url or url in seen: continue
+            seen.add(url)
+            if url and not url.startswith("http"): url = "https://www.bezrealitky.sk" + url
+            nazov = a.get_text(strip=True)
+            if not nazov:
+                par = k.find_parent(["article","div"])
+                h = par.find(["h2","h3"]) if par else None
+                nazov = h.get_text(strip=True) if h else ""
+            if len(nazov) < 5: continue
+            ptxt = k.get_text(" ", strip=True)
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+            uid = url.rstrip("/").split("/")[-1][:24]
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":"","url":url,"id":"br_"+uid})
+        except: continue
+    return out
+
+
+def parse_zoznamrealit(html, src):
+    """Parser pre zoznamrealit.sk — len realitné kancelárie."""
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    karty = soup.select("div[class*='property'],article[class*='property'],div[class*='listing'],li[class*='property']")
+    if not karty:
+        karty = soup.select("a[href*='/nehnutelnost/'],a[href*='/detail/']")
+    for k in karty[:40]:
+        try:
+            a = k if k.name == "a" else k.select_one("h2 a,h3 a,a[href*='/nehnutelnost/']")
+            if not a: continue
+            url = a.get("href","")
+            if not url or url in seen: continue
+            seen.add(url)
+            if url and not url.startswith("http"): url = "https://www.zoznamrealit.sk" + url
+            nazov = a.get_text(strip=True)
+            if len(nazov) < 5: continue
+            ptxt = k.get_text(" ", strip=True)
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+            uid = url.rstrip("/").split("/")[-1][:24]
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":"","url":url,"id":"zr_"+uid})
+        except: continue
+    return out
+
+
+def parse_haloReality(html, src):
+    """Parser pre haloReality.sk."""
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    karty = soup.select("div[class*='property'],article,div[class*='offer'],div[class*='result']")
+    if not karty:
+        karty = soup.select("a[href*='/detail/'],a[href*='/nehnutelnost/']")
+    for k in karty[:40]:
+        try:
+            a = k if k.name == "a" else k.select_one("h2 a,h3 a,a[class*='title']")
+            if not a: continue
+            url = a.get("href","")
+            if not url or url in seen: continue
+            seen.add(url)
+            if url and not url.startswith("http"): url = "https://www.haloreality.sk" + url
+            nazov = a.get_text(strip=True)
+            if len(nazov) < 5: continue
+            ptxt = k.get_text(" ", strip=True)
+            cena = 0
+            mc = re.search(r"([\d][\d\s\xa0]{2,})\s*€", ptxt)
+            if mc: cena = _ext_cislo(mc.group(1))
+            plocha = 0
+            ma = re.search(r"(\d{2,4})\s*m²", ptxt)
+            if ma: plocha = int(ma.group(1))
+            uid = url.rstrip("/").split("/")[-1][:24]
+            out.append({"zdroj":src,"nazov":nazov,"cena":cena,
+                        "plocha":plocha,"popis":"","url":url,"id":"hr_"+uid})
+        except: continue
+    return out
+
+
 PARSERY = {
     "nehnutelnosti": (parse_nehnutelnosti, "nehnutelnosti.sk"),
     "topreality":    (parse_topreality,    "topreality.sk"),
     "bazos":         (parse_bazos,         "bazos.sk"),
+    "reality":       (parse_reality_sk,    "reality.sk"),
+    "bezrealitky":   (parse_bezrealitky,   "bezrealitky.sk"),
+    "zoznamrealit":  (parse_zoznamrealit,  "zoznamrealit.sk"),
+    "haloreality":   (parse_haloReality,   "haloreality.sk"),
 }
 
 
@@ -830,11 +988,15 @@ a.ext:hover{text-decoration:underline}
       <span class="chip" data-v="klimatizácia">Klimatizácia</span>
     </div>
 
-    <div class="sec">Zdroje</div>
+    <div class="sec">Zdroje na skenovanie</div>
     <div class="chip-row" id="f-zdroje">
       <span class="chip on" data-v="nehnutelnosti">nehnutelnosti.sk</span>
       <span class="chip on" data-v="topreality">topreality.sk</span>
-      <span class="chip"    data-v="bazos">bazos.sk</span>
+      <span class="chip on" data-v="reality">reality.sk</span>
+      <span class="chip on" data-v="haloreality">haloreality.sk</span>
+      <span class="chip on" data-v="bezrealitky">bezrealitky.sk</span>
+      <span class="chip on" data-v="zoznamrealit">zoznamrealit.sk</span>
+      <span class="chip on" data-v="bazos">bazos.sk</span>
     </div>
 
     <div class="sec">Ďalšie nastavenia</div>
@@ -1384,7 +1546,7 @@ function openModal(p=null){
   const izby=String(p?.kriteria?.min_izby||2);
   document.querySelectorAll('#f-izby-chips .chip').forEach(c=>c.classList.toggle('on',c.dataset.v===izby));
   _setChips('f-vlastnosti', p?.kriteria?.prefer_slova||[]);
-  _setChips('f-zdroje', p?.zdroje||['nehnutelnosti','topreality']);
+  _setChips('f-zdroje', p?.zdroje||['nehnutelnosti','topreality','reality','haloreality','bezrealitky','zoznamrealit','bazos']);
   G('btn-del').style.display=p?'':'none';
   G('overlay').style.display='block';
 }
