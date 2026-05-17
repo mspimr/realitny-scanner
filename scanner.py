@@ -283,8 +283,8 @@ def _url_zdroja(profil, zk):
     k      = profil["kriteria"]
     typ    = k.get("typ", "any")
     ponuka = k.get("ponuka", "predaj")
-    lok    = k.get("lokalita", "")
-    slug   = _slug(lok)
+    # Preferuj priamo uložený slug z dropdownu
+    slug   = k.get("lokalita_slug") or _slug(k.get("lokalita", ""))
 
     # Mapovanie typov na nehnutelnosti.sk URL segmenty
     _NH_TYP = {
@@ -707,8 +707,16 @@ a.ext:hover{text-decoration:underline}
 
     <div class="sec">Kde · Čo · Ponuka</div>
     <div class="fg">
-      <div class="fi fw"><label>Lokalita * (mesto, okres alebo kraj)</label>
-        <input id="f-lok" placeholder="napr. Liptovský Mikuláš, Ružomberok, Liptov">
+      <div class="fi fw"><label>Lokalita *</label>
+        <div style="position:relative">
+          <input id="f-lok-search" autocomplete="off" placeholder="Začni písať — napr. Liptov, Ružomberok…"
+            oninput="filterLokality(this.value)" onfocus="showLokDropdown()" style="width:100%">
+          <input type="hidden" id="f-lok">
+          <div id="lok-dropdown" style="display:none;position:absolute;z-index:500;width:100%;max-height:220px;overflow-y:auto;
+            background:#fff;border:1px solid #ddd;border-top:none;border-radius:0 0 7px 7px;box-shadow:0 4px 12px rgba(0,0,0,.1)">
+          </div>
+        </div>
+        <div id="lok-selected" style="display:none;font-size:12px;color:#1D9E75;margin-top:3px"></div>
       </div>
       <div class="fi"><label>Typ nehnuteľnosti</label>
         <select id="f-typ">
@@ -840,6 +848,19 @@ function renderTabs(){
     b.onclick=(e)=>{ if(!e.target.classList.contains('tab-x')) switchTab(p.id,true); };
     bar.insertBefore(b,add);
   });
+  // Ak nie sú žiadne profily, zobraz prázdny stav
+  const empty=G('no-profiles');
+  if(!profily.length){
+    if(!empty){
+      const d=document.createElement('div');
+      d.id='no-profiles';
+      d.style.cssText='text-align:center;padding:60px 20px;color:#bbb;font-size:14px;line-height:2';
+      d.innerHTML='Žiadne profily.<br><button class="btn btn-ok" onclick="openModal()" style="margin-top:8px">＋ Vytvoriť prvý profil</button>';
+      G('panes').appendChild(d);
+    }
+  } else {
+    if(empty) empty.remove();
+  }
 }
 
 async function switchTab(pid,doRef=true){
@@ -907,8 +928,193 @@ function renderLeads(pid,leads){
   }).join('');
 }
 
-// Chip toggling — izby = single select, ostatné = multi
+// ── Lokalita dropdown ───────────────────────────────────────
+// Formát: [zobrazený názov, URL slug pre nehnutelnosti.sk, typ: m=mesto o=okres k=kraj]
+const LOKALITY = [
+  // ── Kraje ──
+  ["Celé Slovensko",         "slovensko",              "k"],
+  ["Bratislavský kraj",      "bratislavsky-kraj",      "k"],
+  ["Trnavský kraj",          "trnavsky-kraj",          "k"],
+  ["Trenčiansky kraj",       "trenciansky-kraj",       "k"],
+  ["Nitriansky kraj",        "nitriansky-kraj",        "k"],
+  ["Žilinský kraj",          "zilinsky-kraj",          "k"],
+  ["Banskobystrický kraj",   "banskobystricky-kraj",   "k"],
+  ["Prešovský kraj",         "presovsky-kraj",         "k"],
+  ["Košický kraj",           "kosicky-kraj",           "k"],
+  // ── Okresy Žilinského kraja ──
+  ["Okres Liptovský Mikuláš","okres-liptovsky-mikulas","o"],
+  ["Okres Ružomberok",       "okres-ruzomberok",       "o"],
+  ["Okres Martin",           "okres-martin",           "o"],
+  ["Okres Žilina",           "okres-zilina",           "o"],
+  ["Okres Čadca",            "okres-cadca",            "o"],
+  ["Okres Bytča",            "okres-bytca",            "o"],
+  ["Okres Dolný Kubín",      "okres-dolny-kubin",      "o"],
+  ["Okres Kysucké Nové Mesto","okres-kysucke-nove-mesto","o"],
+  ["Okres Námestovo",        "okres-namestovo",        "o"],
+  ["Okres Turčianske Teplice","okres-turcanske-teplice","o"],
+  ["Okres Tvrdošín",         "okres-tvrdosin",         "o"],
+  // ── Mestá Žilinský kraj ──
+  ["Liptovský Mikuláš",      "liptovsky-mikulas",      "m"],
+  ["Ružomberok",             "ruzomberok",             "m"],
+  ["Žilina",                 "zilina",                 "m"],
+  ["Martin",                 "martin",                 "m"],
+  ["Čadca",                  "cadca",                  "m"],
+  ["Dolný Kubín",            "dolny-kubin",            "m"],
+  ["Námestovo",              "namestovo",              "m"],
+  ["Tvrdošín",               "tvrdosin",               "m"],
+  ["Turčianske Teplice",     "turcanske-teplice",      "m"],
+  ["Liptovský Hrádok",       "liptovsky-hradok",       "m"],
+  ["Ružomberok - Rybárpole", "ruzomberok",             "m"],
+  // ── Okresy Banskobystrický kraj ──
+  ["Okres Banská Bystrica",  "okres-banska-bystrica",  "o"],
+  ["Okres Zvolen",           "okres-zvolen",           "o"],
+  ["Okres Brezno",           "okres-brezno",           "o"],
+  ["Okres Rimavská Sobota",  "okres-rimavska-sobota",  "o"],
+  ["Okres Lučenec",          "okres-lucenec",          "o"],
+  ["Okres Veľký Krtíš",      "okres-velky-krtis",      "o"],
+  ["Okres Detva",            "okres-detva",            "o"],
+  ["Okres Revúca",           "okres-revuca",           "o"],
+  ["Okres Žiar nad Hronom",  "okres-ziar-nad-hronom",  "o"],
+  ["Okres Krupina",          "okres-krupina",          "o"],
+  ["Okres Poltár",           "okres-poltar",           "o"],
+  // ── Mestá BB kraj ──
+  ["Banská Bystrica",        "banska-bystrica",        "m"],
+  ["Zvolen",                 "zvolen",                 "m"],
+  ["Brezno",                 "brezno",                 "m"],
+  ["Rimavská Sobota",        "rimavska-sobota",        "m"],
+  ["Lučenec",                "lucenec",                "m"],
+  ["Žiar nad Hronom",        "ziar-nad-hronom",        "m"],
+  ["Detva",                  "detva",                  "m"],
+  // ── Bratislava ──
+  ["Okres Bratislava I",     "okres-bratislava-i",     "o"],
+  ["Okres Bratislava II",    "okres-bratislava-ii",    "o"],
+  ["Okres Bratislava III",   "okres-bratislava-iii",   "o"],
+  ["Okres Bratislava IV",    "okres-bratislava-iv",    "o"],
+  ["Okres Bratislava V",     "okres-bratislava-v",     "o"],
+  ["Bratislava",             "bratislava",             "m"],
+  ["Bratislava - Staré Mesto","bratislava-stare-mesto","m"],
+  ["Bratislava - Ružinov",   "bratislava-ruzinov",     "m"],
+  ["Bratislava - Petržalka", "bratislava-petrzalka",   "m"],
+  ["Bratislava - Nové Mesto","bratislava-nove-mesto",  "m"],
+  ["Bratislava - Devínska Nová Ves","bratislava-devinska-nova-ves","m"],
+  ["Bratislava - Dúbravka",  "bratislava-dubravka",    "m"],
+  ["Bratislava - Karlova Ves","bratislava-karlova-ves","m"],
+  ["Bratislava - Vajnory",   "bratislava-vajnory",     "m"],
+  // ── Trnavský kraj ──
+  ["Okres Trnava",           "okres-trnava",           "o"],
+  ["Okres Dunajská Streda",  "okres-dunajska-streda",  "o"],
+  ["Okres Senica",           "okres-senica",           "o"],
+  ["Okres Skalica",          "okres-skalica",          "o"],
+  ["Okres Hlohovec",         "okres-hlohovec",         "o"],
+  ["Okres Piešťany",         "okres-piestany",         "o"],
+  ["Okres Galanta",          "okres-galanta",          "o"],
+  ["Trnava",                 "trnava",                 "m"],
+  ["Dunajská Streda",        "dunajska-streda",        "m"],
+  ["Piešťany",               "piestany",               "m"],
+  ["Senica",                 "senica",                 "m"],
+  ["Galanta",                "galanta",                "m"],
+  // ── Trenčiansky kraj ──
+  ["Okres Trenčín",          "okres-trencin",          "o"],
+  ["Okres Považská Bystrica","okres-povazska-bystrica","o"],
+  ["Okres Nové Mesto nad Váhom","okres-nove-mesto-nad-vahom","o"],
+  ["Okres Prievidza",        "okres-prievidza",        "o"],
+  ["Okres Ilava",            "okres-ilava",            "o"],
+  ["Okres Púchov",           "okres-puchov",           "o"],
+  ["Trenčín",                "trencin",                "m"],
+  ["Považská Bystrica",      "povazska-bystrica",      "m"],
+  ["Prievidza",              "prievidza",              "m"],
+  ["Nové Mesto nad Váhom",   "nove-mesto-nad-vahom",   "m"],
+  ["Púchov",                 "puchov",                 "m"],
+  // ── Nitriansky kraj ──
+  ["Okres Nitra",            "okres-nitra",            "o"],
+  ["Okres Nové Zámky",       "okres-nove-zamky",       "o"],
+  ["Okres Komárno",          "okres-komarno",          "o"],
+  ["Okres Levice",           "okres-levice",           "o"],
+  ["Okres Topoľčany",        "okres-topol-cany",       "o"],
+  ["Okres Zlaté Moravce",    "okres-zlate-moravce",    "o"],
+  ["Nitra",                  "nitra",                  "m"],
+  ["Nové Zámky",             "nove-zamky",             "m"],
+  ["Komárno",                "komarno",                "m"],
+  ["Levice",                 "levice",                 "m"],
+  ["Topoľčany",              "topolcany",              "m"],
+  // ── Prešovský kraj ──
+  ["Okres Prešov",           "okres-presov",           "o"],
+  ["Okres Poprad",           "okres-poprad",           "o"],
+  ["Okres Stará Ľubovňa",    "okres-stara-lubovna",    "o"],
+  ["Okres Kežmarok",         "okres-kezmarok",         "o"],
+  ["Okres Bardejov",         "okres-bardejov",         "o"],
+  ["Okres Humenné",          "okres-humenne",          "o"],
+  ["Okres Michalovce",       "okres-michalovce",       "o"],
+  ["Okres Vranov nad Topľou","okres-vranov-nad-toplou","o"],
+  ["Prešov",                 "presov",                 "m"],
+  ["Poprad",                 "poprad",                 "m"],
+  ["Stará Ľubovňa",          "stara-lubovna",          "m"],
+  ["Kežmarok",               "kezmarok",               "m"],
+  ["Bardejov",               "bardejov",               "m"],
+  ["Humenné",                "humenne",                "m"],
+  ["Vysoké Tatry",           "vysoke-tatry",           "m"],
+  ["Levoča",                 "levoca",                 "m"],
+  ["Spišská Nová Ves",       "spiska-nova-ves",        "m"],
+  // ── Košický kraj ──
+  ["Okres Košice I",         "okres-kosice-i",         "o"],
+  ["Okres Košice II",        "okres-kosice-ii",        "o"],
+  ["Okres Košice III",       "okres-kosice-iii",       "o"],
+  ["Okres Košice IV",        "okres-kosice-iv",        "o"],
+  ["Okres Košice-okolie",    "okres-kosice-okolie",    "o"],
+  ["Okres Gelnica",          "okres-gelnica",          "o"],
+  ["Okres Rožňava",          "okres-roznava",          "o"],
+  ["Košice",                 "kosice",                 "m"],
+  ["Košice - Staré Mesto",   "kosice-stare-mesto",     "m"],
+  ["Rožňava",                "roznava",                "m"],
+  ["Gelnica",                "gelnica",                "m"],
+];
+
+const LOK_TYPE_LABEL = {m:"mesto", o:"okres", k:"kraj"};
+
+function _normStr(s){
+  return s.toLowerCase()
+    .replace(/[áä]/g,"a").replace(/č/g,"c").replace(/ď/g,"d")
+    .replace(/[éě]/g,"e").replace(/[íî]/g,"i").replace(/ľ/g,"l")
+    .replace(/ĺ/g,"l").replace(/ň/g,"n").replace(/[óô]/g,"o")
+    .replace(/ŕ/g,"r").replace(/š/g,"s").replace(/ť/g,"t")
+    .replace(/[úů]/g,"u").replace(/ý/g,"y").replace(/ž/g,"z");
+}
+
+function filterLokality(q){
+  const dd=G('lok-dropdown');
+  if(!q){dd.style.display='none';return;}
+  const norm=_normStr(q);
+  const matches=LOKALITY.filter(([name])=>_normStr(name).includes(norm)).slice(0,12);
+  if(!matches.length){dd.style.display='none';return;}
+  dd.innerHTML=matches.map(([name,slug,typ])=>
+    `<div onclick="selectLokalita('${name}','${slug}')"
+      style="padding:8px 12px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #f5f5f5"
+      onmouseover="this.style.background='#f8f7f4'" onmouseout="this.style.background=''">
+      <span>${name}</span>
+      <span style="font-size:11px;color:#bbb;margin-left:8px">${LOK_TYPE_LABEL[typ]}</span>
+    </div>`
+  ).join('');
+  dd.style.display='block';
+}
+
+function showLokDropdown(){
+  const q=G('f-lok-search').value;
+  if(q) filterLokality(q);
+}
+
+function selectLokalita(name, slug){
+  G('f-lok-search').value=name;
+  G('f-lok').value=slug;
+  G('lok-dropdown').style.display='none';
+  G('lok-selected').style.display='block';
+  G('lok-selected').textContent='✓ '+name;
+}
+
+// Zatvor dropdown kliknutím mimo
 document.addEventListener('click',e=>{
+  if(!e.target.closest('#f-lok-search') && !e.target.closest('#lok-dropdown'))
+    G('lok-dropdown') && (G('lok-dropdown').style.display='none');
+});
   const chip=e.target.closest('.chip');
   if(!chip) return;
   const row=chip.closest('.chip-row');
@@ -930,7 +1136,13 @@ function openModal(p=null){
   G('f-nazov').value=p?.nazov||'';
   G('f-typ').value=p?.kriteria?.typ||'byt';
   G('f-ponuka').value=p?.kriteria?.ponuka||'predaj';
-  G('f-lok').value=p?.kriteria?.lokalita||'';
+  G('f-lok').value=p?.kriteria?.lokalita_slug||p?.kriteria?.lokalita||'';
+  // Nájdi zobrazený názov podľa slugu
+  const lokSlug=G('f-lok').value;
+  const lokEntry=LOKALITY.find(([,s])=>s===lokSlug);
+  G('f-lok-search').value=lokEntry?lokEntry[0]:(p?.kriteria?.lokalita||'');
+  G('lok-selected').style.display=lokSlug?'block':'none';
+  G('lok-selected').textContent=lokSlug?(lokEntry?'✓ '+lokEntry[0]:'✓ '+lokSlug):'';
   G('f-minc').value=p?.kriteria?.min_cena||'';
   G('f-maxc').value=p?.kriteria?.max_cena||'';
   G('f-mina').value=p?.kriteria?.min_plocha||'';
@@ -952,9 +1164,12 @@ function editProfil(pid){openModal(profily.find(p=>p.id===pid));}
 function closeModal(){G('overlay').style.display='none';}
 
 async function uloz(){
-  const nazov=G('f-nazov').value.trim(), lok=G('f-lok').value.trim();
+  const nazov=G('f-nazov').value.trim();
+  const lok=G('f-lok').value.trim();
+  const lokSearch=G('f-lok-search').value.trim();
   if(!nazov){toast('Zadaj názov profilu',false);return;}
-  if(!lok){toast('Zadaj lokalitu',false);return;}
+  if(!lokSearch){toast('Zadaj lokalitu',false);return;}
+  if(!lok){toast('Vyber lokalitu zo zoznamu (klikni na návrh)',false);return;}
   const zdroje=_chips('f-zdroje');
   if(!zdroje.length){toast('Vyber aspoň jeden zdroj',false);return;}
   const izbyChip=document.querySelector('#f-izby-chips .chip.on');
@@ -966,7 +1181,8 @@ async function uloz(){
     kriteria:{
       typ:G('f-typ').value,
       ponuka:G('f-ponuka').value,
-      lokalita:lok,
+      lokalita: lokSearch,
+      lokalita_slug: lok,
       min_cena:+G('f-minc').value||0,
       max_cena:+G('f-maxc').value||999999,
       min_plocha:+G('f-mina').value||0,
